@@ -12,8 +12,12 @@
     <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
    
-    <!-- Load Lucide Icons - MUST be loaded before the Babel script starts -->
-    <script src="https://unpkg.com/lucide-react@0.292.0/dist/umd/lucide-react.min.js"></script>
+    <!--
+        FIXED: Loading Lucide Icons. The UMD bundle exposes the icons under a global variable
+        (usually 'lucideReact' or 'lucide') which we will access explicitly using 'window.lucideReact'
+        in the script below to avoid the ReferenceError.
+    -->
+    <script src="https://unpkg.com/lucide-react@0.327.0/dist/umd/lucide-react.min.js"></script>
 
     <!-- Load Firebase SDKs and expose them globally -->
     <script type="module">
@@ -70,12 +74,13 @@
         // --- REACT & ICON IMPORTS ---
         const { useState, useEffect, useMemo, useCallback } = React;
        
-        // FIX: Destructure Lucide icons correctly
+        // FIXED: Accessing Lucide icons directly from the global window.lucideReact object
+        // to avoid the "lucideReact is not defined" error.
         const {
             X, CheckCircle, AlertTriangle, Cpu, HardHat, BarChart2, Shield,
             Settings, User, BookOpen, Clock, Zap, Target, MapPin, LogOut, FileText,
             Users, Filter, TrendingUp, DollarSign, Bell, Layers, ListTodo
-        } = lucideReact.icons;
+        } = window.lucideReact || {}; // Fallback to empty object if not defined (though it should be)
 
         // --- FIREBASE IMPORTS ---
         const {
@@ -250,6 +255,44 @@
                 return isNaN(normalizedScore) ? 0 : Math.min(100, normalizedScore);
             }, [assetData, totalAssets]);
            
+            // --- UI Helper Components ---
+
+            const InputField = ({ label, name, value, onChange, placeholder, type = 'text', min = null, max = null }) => (
+                <div>
+                    <label htmlFor={name} className="block text-sm font-medium text-gray-700">{label}</label>
+                    <input
+                        type={type}
+                        id={name}
+                        name={name}
+                        value={value}
+                        onChange={onChange}
+                        placeholder={placeholder}
+                        min={min}
+                        max={max}
+                        className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-lg shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm"
+                        required
+                    />
+                </div>
+            );
+
+            const SelectField = ({ label, name, value, onChange, options }) => (
+                <div>
+                    <label htmlFor={name} className="block text-sm font-medium text-gray-700">{label}</label>
+                    <select
+                        id={name}
+                        name={name}
+                        value={value}
+                        onChange={onChange}
+                        className="mt-1 block w-full px-3 py-2 border border-gray-300 bg-white rounded-lg shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm"
+                        required
+                    >
+                        {options.map(option => (
+                            <option key={option} value={option}>{option}</option>
+                        ))}
+                    </select>
+                </div>
+            );
+
             // --- ACTIONS ---
             const handleSignOut = async () => {
                 if (auth) {
@@ -306,6 +349,7 @@
                         createdBy: userId,
                     };
                    
+                    // Firestore automatically generates a document ID when doc() is called without an argument
                     await setDoc(doc(assetsRef), assetToSave);
 
                     setNewAsset(initialNewAsset);

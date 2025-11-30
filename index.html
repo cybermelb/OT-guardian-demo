@@ -11,8 +11,6 @@
     <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
     <!-- Load Babel to process JSX -->
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
-    <!-- Load Lucide Icons -->
-    <script src="https://unpkg.com/lucide@latest"></script>
    
     <!-- Load Firebase SDKs -->
     <script type="module">
@@ -32,7 +30,9 @@
         window.__firebase_config = typeof __firebase_config !== 'undefined' ? __firebase_config : '{}';
        
         // Log level for debugging Firestore operations
-        setLogLevel('Debug');
+        if (typeof FirebaseServices.setLogLevel === 'function') {
+            FirebaseServices.setLogLevel('Debug');
+        }
     </script>
 
     <!-- Print/PDF Optimization and custom styling -->
@@ -63,13 +63,60 @@
     <!-- The entire React application is defined here -->
     <script type="text/babel">
         const { useState, useEffect, useMemo, useCallback } = React;
-        const { X, CheckCircle, AlertTriangle, Cpu, HardHat, BarChart2, Shield, Settings, User, BookOpen, Clock, Zap, Target, MapPin, Users, Filter, ArrowDownUp, LogOut, Loader, Key, Mail, Lock, UserPlus } = lucide;
+
+        // --- INLINE SVG ICONS (Replaces Lucide dependency for stability) ---
+        const Shield = (props) => (
+            <svg {...props} xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path></svg>
+        );
+        const LogOut = (props) => (
+            <svg {...props} xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"></path><polyline points="16 17 21 12 16 7"></polyline><line x1="21" y1="12" x2="9" y2="12"></line></svg>
+        );
+        const Loader = (props) => (
+            <svg {...props} xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 12a9 9 0 1 1-6.219-8.56"></path></svg>
+        );
+        const Mail = (props) => (
+            <svg {...props} xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="2" y="4" width="20" height="16" rx="2"></rect><path d="m22 7-8.97 5.7a1.94 1.94 0 0 1-2.06 0L2 7"></path></svg>
+        );
+        const Lock = (props) => (
+            <svg {...props} xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect><path d="M7 11V7a5 5 0 0 1 10 0v4"></path></svg>
+        );
+        const Key = (props) => (
+            <svg {...props} xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M2 18 16 4l3 3 7 7-3 3-3-3zM2 18l3-3 7 7-3 3zM16 4l-3 3-7 7 3-3z"></path><circle cx="16" cy="4" r="2"></circle><circle cx="5" cy="15" r="2"></circle></svg>
+        );
+        const UserPlus = (props) => (
+            <svg {...props} xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><line x1="19" y1="8" x2="19" y2="14"/><line x1="22" y1="11" x2="16" y2="11"/></svg>
+        );
+        const AlertTriangle = (props) => (
+            <svg {...props} xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12" y2="17"/></svg>
+        );
+        const BarChart2 = (props) => (
+            <svg {...props} xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="18" y1="20" x2="18" y2="10"></line><line x1="12" y1="20" x2="12" y2="4"></line><line x1="6" y1="20" x2="6" y2="14"></line></svg>
+        );
+        const Target = (props) => (
+            <svg {...props} xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"></circle><circle cx="12" cy="12" r="6"></circle><circle cx="12" cy="12" r="2"></circle></svg>
+        );
+        const Zap = (props) => (
+            <svg {...props} xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon></svg>
+        );
+        const Cpu = (props) => (
+            <svg {...props} xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="4" y="4" width="16" height="16" rx="2" ry="2"></rect><polyline points="9 9 15 9 15 15 9 15 9 9"></polyline><line x1="9" y1="1" x2="9" y2="4"></line><line x1="15" y1="1" x2="15" y2="4"></line><line x1="9" y1="20" x2="9" y2="23"></line><line x1="15" y1="20" x2="15" y2="23"></line><line x1="20" y1="9" x2="23" y2="9"></line><line x1="20" y1="15" x2="23" y2="15"></line><line x1="1" y1="9" x2="4" y2="9"></line><line x1="1" y1="15" x2="4" y2="15"></line></svg>
+        );
+        const CheckCircle = (props) => (
+            <svg {...props} xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M22 11.08V12a10 10 0 1 1-5.93-8.68"></path><polyline points="22 4 12 14.01 9 11.01"></polyline></svg>
+        );
+        const HardHat = (props) => (
+            <svg {...props} xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M19 11h-1.5a1.5 1.5 0 0 1 0-3H19a1.5 1.5 0 0 1 0 3z"/><path d="M12 19V9l6.3-2.61a1.68 1.68 0 0 0-.6-3.2l-5.6-2.58a1.68 1.68 0 0 0-2.6 1.3V5h-.48a.48.48 0 0 0-.48.48V7.5l-2 1.5V11h4v4h-4v4h4v3.5a.5.5 0 0 0 1 0V19z"/></svg>
+        );
+        const User = (props) => (
+            <svg {...props} xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2"></path><circle cx="12" cy="7" r="4"></circle></svg>
+        );
+        // --- END OF INLINE SVG ICONS ---
+
 
         // --- CONFIGURATION & FIREBASE INITIALIZATION ---
         let firebaseApp, db, auth;
         let isFirebaseInitialized = false;
 
-        // Wait for the Firebase SDK to be loaded before initializing
         const initFirebase = () => {
             if (isFirebaseInitialized || !window.FirebaseServices) return;
 
@@ -79,7 +126,8 @@
             const firebaseConfig = JSON.parse(window.__firebase_config);
 
             if (!firebaseConfig || !firebaseConfig.apiKey) {
-                console.error("Firebase config is missing or incomplete.");
+                // Do not throw an error, but mark as uninitialized.
+                console.warn("Firebase config is missing or incomplete. Functionality will be limited to UI display.");
                 return;
             }
 
@@ -94,7 +142,6 @@
             }
         };
 
-        // Call initialization function
         initFirebase();
 
         // --- UTILITY FUNCTIONS ---
@@ -102,11 +149,8 @@
         // Firestore Path Helpers
         const getPublicCollectionRef = (collectionName) => {
             const appId = window.__app_id;
+            // Check if db is initialized before trying to use FirebaseServices.collection
             return db ? FirebaseServices.collection(db, `artifacts/${appId}/public/data/${collectionName}`) : null;
-        };
-        const getUserPrivateCollectionRef = (collectionName, userId) => {
-            const appId = window.__app_id;
-            return db && userId ? FirebaseServices.collection(db, `artifacts/${appId}/users/${userId}/${collectionName}`) : null;
         };
 
         // --- COMMON UI COMPONENTS ---
@@ -169,14 +213,26 @@
 
         // --- AUTHENTICATION GATE COMPONENT ---
 
-        const AuthGate = ({ setAuthUser }) => {
+        const AuthGate = () => {
             const [isRegistering, setIsRegistering] = useState(false);
             const [email, setEmail] = useState('');
             const [password, setPassword] = useState('');
             const [error, setError] = useState(null);
             const [isLoading, setIsLoading] = useState(false);
 
-            const auth = FirebaseServices.getAuth(firebaseApp);
+            if (!isFirebaseInitialized || !auth) {
+                return (
+                    <div className="min-h-screen flex items-center justify-center bg-gray-100 p-4">
+                        <Card className="w-full max-w-md p-8 text-center border-red-500 border-2">
+                            <AlertTriangle className="w-8 h-8 mx-auto text-red-500 mb-4" />
+                            <h2 className="text-xl font-bold text-red-700 mb-2">Configuration Error</h2>
+                            <p className="text-gray-600">
+                                Firebase services failed to initialize. Please ensure the `__firebase_config` global variable is correctly provided in the environment.
+                            </p>
+                        </Card>
+                    </div>
+                );
+            }
 
             const handleAuth = async (e) => {
                 e.preventDefault();
@@ -191,9 +247,8 @@
                         await FirebaseServices.signInWithEmailAndPassword(auth, email, password);
                         console.log("User signed in.");
                     }
-                    // onAuthStateChanged listener handles setting the user state in App
+                    // onAuthStateChanged listener handles state change in App component
                 } catch (err) {
-                    // Display friendly error message
                     const msg = err.code ? err.code.replace('auth/', '').replace(/-/g, ' ') : 'An unknown error occurred.';
                     setError(msg.charAt(0).toUpperCase() + msg.slice(1));
                 } finally {
@@ -559,14 +614,7 @@
             // 1. Authentication Listener Effect
             useEffect(() => {
                 if (!isFirebaseInitialized || !auth) {
-                    setIsAuthLoading(true);
-                    // Re-check after a small delay in case the module load was slow
-                    setTimeout(() => {
-                        if (!isFirebaseInitialized) {
-                            console.error("Firebase not initialized after waiting. Cannot set up auth listener.");
-                            setIsAuthLoading(false); // Stop loading to prevent infinite spinner
-                        }
-                    }, 1000);
+                    setIsAuthLoading(false); // Stop loading, show config error in AuthGate if applicable
                     return;
                 }
                
@@ -577,8 +625,8 @@
                 });
 
                 return () => unsubscribe();
-            }, [isFirebaseInitialized]);
-           
+            }, []); // Empty dependency array ensures it only runs once
+
             // Derive current userId and email from authUser
             const userId = authUser?.uid;
             const userEmail = authUser?.email || 'N/A';
@@ -586,7 +634,7 @@
             // 2. Data Fetching Effect (Assets, Risks, Status)
             useEffect(() => {
                 // Only proceed if authenticated and Firebase services are ready
-                if (!userId || isAuthLoading || !db) return;
+                if (!userId || isAuthLoading || !db || !isFirebaseInitialized) return;
 
                 // Function to set up a Firestore snapshot listener for a public collection
                 const setupPublicListener = (collectionName, setState) => {
@@ -611,31 +659,42 @@
                 const unsubscribeRisks = setupPublicListener('risks', setRisks);
 
                 // Deployment Status listener (Public data)
-                const unsubscribeStatus = FirebaseServices.onSnapshot(
-                    FirebaseServices.doc(getPublicCollectionRef('status'), 'current'),
-                    (docSnapshot) => {
-                        if (docSnapshot.exists()) {
-                            setDeploymentStatus(docSnapshot.data());
-                        } else {
-                            // Initialize default status if it doesn't exist
-                            const defaultStatus = {
-                                status: 'Online',
-                                lastCheck: FirebaseServices.serverTimestamp()
-                            };
-                            FirebaseServices.setDoc(FirebaseServices.doc(getPublicCollectionRef('status'), 'current'), defaultStatus, { merge: true });
-                            setDeploymentStatus(defaultStatus);
+                // Note: The doc path uses the collection ref builder
+                const statusCollectionRef = getPublicCollectionRef('status');
+                let unsubscribeStatus = () => {};
+
+                if (statusCollectionRef) {
+                    unsubscribeStatus = FirebaseServices.onSnapshot(
+                        FirebaseServices.doc(statusCollectionRef, 'current'),
+                        (docSnapshot) => {
+                            if (docSnapshot.exists()) {
+                                setDeploymentStatus(docSnapshot.data());
+                            } else {
+                                // Initialize default status if it doesn't exist (Only if authenticated)
+                                if(userId) {
+                                    const defaultStatus = {
+                                        status: 'Online',
+                                        lastCheck: FirebaseServices.serverTimestamp()
+                                    };
+                                    // Set only if doc doesn't exist, preventing unnecessary writes on every load
+                                    FirebaseServices.setDoc(FirebaseServices.doc(statusCollectionRef, 'current'), defaultStatus, { merge: true })
+                                        .catch(e => console.error("Error setting initial status:", e));
+                                    setDeploymentStatus(defaultStatus);
+                                }
+                            }
+                        }, (error) => {
+                            console.error("Error listening to deployment status:", error);
                         }
-                    }, (error) => {
-                        console.error("Error listening to deployment status:", error);
-                    }
-                );
+                    );
+                }
+
 
                 return () => {
                     unsubscribeAssets();
                     unsubscribeRisks();
                     unsubscribeStatus();
                 };
-            }, [userId, isAuthLoading]);
+            }, [userId, isAuthLoading, isFirebaseInitialized]);
 
             // 3. Data Handlers
 
@@ -658,7 +717,6 @@
             // Simplified Admin Check (Mock role-based access control)
             const checkAdminAccess = () => {
                 // In a real app, you would check a specific user role/claim.
-                // For this demo, we'll check if the user is using the admin test email (replace with a real admin email for testing).
                 return userEmail === 'admin@otguardian.com';
             };
            
@@ -669,7 +727,7 @@
                 }
                
                 if (!userId) {
-                    return <AuthGate setAuthUser={setAuthUser} />;
+                    return <AuthGate />;
                 }
                
                 switch (currentView) {
@@ -743,18 +801,21 @@
                                     { view: 'securityControls', label: 'Controls', icon: <CheckCircle className="w-4 h-4 mr-2" /> },
                                     { view: 'remediationTasks', label: 'Remediation', icon: <HardHat className="w-4 h-4 mr-2" /> },
                                     ...(checkAdminAccess() ? [{ view: 'admin', label: 'Admin', icon: <User className="w-4 h-4 mr-2" /> }] : []),
-                                ].map(item => (
-                                    <button
-                                        key={item.view}
-                                        onClick={() => setCurrentView(item.view)}
-                                        className={`flex items-center px-3 py-2 text-sm font-semibold rounded-lg transition-all duration-150 ${
-                                            currentView === item.view ? 'bg-indigo-700 text-white shadow-md' : 'text-gray-700 hover:bg-indigo-100'
-                                        }`}
-                                    >
-                                        {item.icon}
-                                        {item.label}
-                                    </button>
-                                ))}
+                                ].map(item => {
+                                    const Icon = item.icon.type; // Safely grab the component type from the JSX element
+                                    return (
+                                        <button
+                                            key={item.view}
+                                            onClick={() => setCurrentView(item.view)}
+                                            className={`flex items-center px-3 py-2 text-sm font-semibold rounded-lg transition-all duration-150 ${
+                                                currentView === item.view ? 'bg-indigo-700 text-white shadow-md' : 'text-gray-700 hover:bg-indigo-100'
+                                            }`}
+                                        >
+                                            {item.icon}
+                                            {item.label}
+                                        </button>
+                                    );
+                                })}
                             </nav>
                         )}
                        
@@ -787,4 +848,3 @@
     </script>
 </body>
 </html>
-

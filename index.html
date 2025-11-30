@@ -3,16 +3,16 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>OT Guardian Console (Single-File)</title>
+    <title>OT Guardian Security Console (Enhanced)</title>
     <!-- Load Tailwind CSS -->
     <script src="https://cdn.tailwindcss.com"></script>
-    
+   
     <!-- Load React, ReactDOM, and Babel -->
     <script crossorigin src="https://unpkg.com/react@18/umd/react.development.js"></script>
     <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
-    
-    <!-- Load Lucide Icons - Required for all the UI icons -->
+   
+    <!-- Load Lucide Icons - MUST be loaded before the Babel script starts -->
     <script src="https://unpkg.com/lucide-react@0.292.0/dist/umd/lucide-react.min.js"></script>
 
     <!-- Load Firebase SDKs and expose them globally -->
@@ -36,11 +36,10 @@
         window.onSnapshot = onSnapshot;
         window.serverTimestamp = serverTimestamp;
         window.setLogLevel = setLogLevel;
-        
+       
         // 2. Configuration Variables: Uses Canvas globals if available, otherwise uses hardcoded config for deployment.
-        // NOTE: The Firebase config MUST be the full object structure.
         const configPlaceholder = {
-            apiKey: "AIzaSyAyDKqA-j9yjp4KeGPGR49Cr6_q_drxBVs", // Replace with your actual key for Vercel
+            apiKey: "AIzaSyAyDKqA-j9yjp4KeGPGR49Cr6_q_drxBVs",
             authDomain: "otgaurdian.firebaseapp.com",
             projectId: "otgaurdian",
             storageBucket: "otgaurdian.firebasestorage.app",
@@ -48,33 +47,18 @@
             appId: "1:719542806938:web:ed9376fcc7d04851e47223",
             measurementId: "G-9FMPGC5C93"
         };
-        
+       
         window.__app_id = typeof __app_id !== 'undefined' ? __app_id : configPlaceholder.appId;
         window.__firebase_config = typeof __firebase_config !== 'undefined' ? __firebase_config : JSON.stringify(configPlaceholder);
-        // The initial auth token is for Canvas only; default to null for standard deployment
-        window.__initial_auth_token = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null; 
-
-        // 3. Expose Lucide Icons globally
-        if (typeof lucideReact !== 'undefined') {
-            const icons = lucideReact.icons;
-            for (const key in icons) {
-                if (icons.hasOwnProperty(key)) {
-                    window[key] = icons[key];
-                }
-            }
-        }
+        window.__initial_auth_token = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
     </script>
-    
+   
     <!-- Print/PDF Optimization -->
     <style>
         @media print {
-            /* Hide navigation and controls for clean printing */
             .print-hide { display: none !important; }
-            /* Ensure content takes full width */
             .print-full { max-width: none !important; margin: 0 !important; padding: 0 !important; }
-            /* Remove background color */
             body, .bg-gray-100 { background-color: white !important; }
-            /* Force table cells to break for smaller print pages */
             .table-responsive td, .table-responsive th { white-space: normal !important; }
         }
     </style>
@@ -83,36 +67,40 @@
     <div id="root"></div>
 
     <script type="text/babel">
+        // --- REACT & ICON IMPORTS ---
         const { useState, useEffect, useMemo, useCallback } = React;
-        
-        // IMPORTANT: Firebase imports and constants are now exposed globally by the module script above
-        const { 
-            initializeApp, getAuth, signInAnonymously, signInWithCustomToken, 
-            onAuthStateChanged, signOut, getFirestore, doc, setDoc, 
-            collection, query, onSnapshot, serverTimestamp, setLogLevel 
-        } = window;
-        
-        // Also import the Lucide icons from the global window object
-        const { 
-            X, CheckCircle, AlertTriangle, Cpu, HardHat, BarChart2, Shield, 
-            Settings, User, BookOpen, Clock, Zap, Target, MapPin, Users, 
-            Filter, ArrowDownUp, LogOut, ChevronDown 
+       
+        // FIX: Destructure Lucide icons correctly
+        const {
+            X, CheckCircle, AlertTriangle, Cpu, HardHat, BarChart2, Shield,
+            Settings, User, BookOpen, Clock, Zap, Target, MapPin, LogOut, FileText,
+            Users, Filter, TrendingUp, DollarSign, Bell, Layers, ListTodo
+        } = lucideReact.icons;
+
+        // --- FIREBASE IMPORTS ---
+        const {
+            initializeApp, getAuth, signInAnonymously, signInWithCustomToken,
+            onAuthStateChanged, signOut, getFirestore, doc, setDoc,
+            collection, query, onSnapshot, serverTimestamp, setLogLevel
         } = window;
 
         // --- CONFIGURATION CHECK & CONSTANTS ---
         const firebaseConfig = window.__firebase_config ? JSON.parse(window.__firebase_config) : {};
         const appId = window.__app_id || 'default-app-id';
         const initialAuthToken = window.__initial_auth_token;
-        
-        // Hardcoded Admin and Engineer UIDs for client-side access control
-        // NOTE: This is client-side only. Firestore security relies on security rules.
+       
+        // Hardcoded Role UIDs (For Demo/Canvas Environment)
         const ADMIN_UIDS = [
-            'ZP6wE0ha6FWY9G4wJGXaVhRHioj2', // Admin User 1
-            'JzUrZlEonaPM59hJEEM3waNzNOk2'  // Admin User 2 (or Engineer)
+            'ZP6wE0ha6FWY9G4wJGXaVhRHioj2', // Engineer/Admin User 1 (Highest Privilege)
+            'JzUrZlEonaPM59hJEEM3waNzNOk2'  // Engineer/Admin User 2
+        ];
+        // Manager UIDs: Can view dashboards but NOT administer system settings/add assets (conceptual for demo)
+        const MANAGER_UIDS = [
+            'Manager1_demo_uid_123', // Example manager UID (replace with real UID if needed)
         ];
 
         // Firestore paths for Public Data
-        const getPublicCollectionPath = (collectionName) => 
+        const getPublicCollectionPath = (collectionName) =>
             `artifacts/${appId}/public/data/${collectionName}`;
 
         const App = () => {
@@ -121,26 +109,26 @@
             const [auth, setAuth] = useState(null);
             const [userId, setUserId] = useState(null);
             const [isAuthReady, setIsAuthReady] = useState(false);
-            const [isAdmin, setIsAdmin] = useState(false); // Tracks if the user is one of the hardcoded UIDs
+            const [isAdmin, setIsAdmin] = useState(false);
+            const [isManager, setIsManager] = useState(false); // New Manager state
 
             // App Data State
-            const [currentView, setCurrentView] = useState('riskDashboard');
-            const [assetData, setAssetData] = useState([]); // List of assets
-            const [deploymentStatus, setDeploymentStatus] = useState(null); // Single deployment status object
+            const [currentView, setCurrentView] = useState('overview');
+            const [assetData, setAssetData] = useState([]);
+            const [deploymentStatus, setDeploymentStatus] = useState(null);
             const [loading, setLoading] = useState(true);
             const [error, setError] = useState(null);
-            const [modal, setModal] = useState(null); // { type: 'error' | 'success', message: '...' }
+            const [modal, setModal] = useState(null);
 
             // Asset Builder State
             const initialNewAsset = {
                 name: '',
                 type: 'PLC',
                 ipAddress: '',
-                location: '',
+                location: 'Site A',
                 criticality: 'High',
                 vulnerabilityScore: 0,
                 lastMaintenance: new Date().toISOString().split('T')[0],
-                controls: {}, 
             };
             const [newAsset, setNewAsset] = useState(initialNewAsset);
             const [isSaving, setIsSaving] = useState(false);
@@ -152,8 +140,7 @@
                     setLoading(false);
                     return;
                 }
-                
-                // 1. Initialize Firebase
+               
                 try {
                     setLogLevel('debug');
                     const firebaseApp = initializeApp(firebaseConfig);
@@ -163,41 +150,41 @@
                     setDb(firestoreDb);
                     setAuth(firebaseAuth);
 
-                    // 2. Handle Authentication
-                    const handleAuth = async () => {
-                        try {
-                            // Check for the Canvas initial token first
-                            if (initialAuthToken) {
-                                console.log("Signing in with custom token (Canvas environment).");
-                                await signInWithCustomToken(firebaseAuth, initialAuthToken);
-                            } else {
-                                // Fallback for standard deployment (Vercel) - Anonymous sign-in
-                                console.log("Signing in anonymously (standard deployment).");
-                                await signInAnonymously(firebaseAuth);
-                            }
-                        } catch (e) {
-                            console.error('Authentication Error:', e);
-                            setError(`Authentication failed: ${e.message}`);
-                        }
-                    };
-
-                    handleAuth();
-
-                    // 3. Set up Auth State Listener
                     const unsubscribe = onAuthStateChanged(firebaseAuth, (user) => {
                         if (user) {
                             setUserId(user.uid);
-                            // Check if the current user ID is in the defined Admin UIDs array
-                            setIsAdmin(ADMIN_UIDS.includes(user.uid));
+                            const userIsAdmin = ADMIN_UIDS.includes(user.uid);
+                            const userIsManager = MANAGER_UIDS.includes(user.uid);
+
+                            setIsAdmin(userIsAdmin);
+                            setIsManager(userIsManager);
                         } else {
                             setUserId(null);
                             setIsAdmin(false);
+                            setIsManager(false);
                         }
                         setIsAuthReady(true);
                         setLoading(false);
                     });
+                   
+                    const handleAuth = async () => {
+                        try {
+                            if (initialAuthToken) {
+                                console.log("Auth: Signing in with custom token (Canvas environment).");
+                                await signInWithCustomToken(firebaseAuth, initialAuthToken);
+                            } else {
+                                console.log("Auth: Signing in anonymously (Standard deployment fallback).");
+                                await signInAnonymously(firebaseAuth);
+                            }
+                        } catch (e) {
+                            console.error('Authentication Error:', e);
+                            setError(`Authentication failed: ${e.message}. You are signed out.`);
+                        }
+                    };
 
+                    handleAuth();
                     return () => unsubscribe();
+                   
                 } catch (e) {
                     console.error('Firebase Initialization Error:', e);
                     setError(`Firebase setup error: ${e.message}`);
@@ -207,12 +194,12 @@
 
             // --- FIRESTORE DATA LISTENERS (REAL-TIME DATA) ---
             useEffect(() => {
-                if (!db || !isAuthReady || !userId) return;
+                if (!db || !isAuthReady) return;
 
-                // 1. Listen to Asset Data (Public Collection for shared data)
+                // 1. Listen to Asset Data
                 const assetCollectionRef = collection(db, getPublicCollectionPath('assets'));
                 const qAssets = query(assetCollectionRef);
-                
+               
                 const unsubscribeAssets = onSnapshot(qAssets, (snapshot) => {
                     const fetchedAssets = snapshot.docs.map(doc => ({
                         id: doc.id,
@@ -224,29 +211,26 @@
                     setError('Failed to load asset data. Check console for details.');
                 });
 
-                // 2. Listen to Deployment Status (Public Document, ID 'global')
+                // 2. Listen to Deployment Status (ID 'global')
                 const statusDocRef = doc(db, getPublicCollectionPath('status'), 'global');
-                
+               
                 const unsubscribeStatus = onSnapshot(statusDocRef, (docSnapshot) => {
                     if (docSnapshot.exists()) {
                         setDeploymentStatus(docSnapshot.data());
                     } else {
-                        // Default state if status document doesn't exist
-                        setDeploymentStatus({ status: 'Offline', message: 'No global status document found.', lastCheck: serverTimestamp() });
-                        // Optionally create it if it doesn't exist
-                        setDoc(statusDocRef, { status: 'Unknown', message: 'Initialized document.', lastCheck: serverTimestamp() }, { merge: true }).catch(console.error);
+                        const defaultStatus = { status: 'Unknown', message: 'Initializing global status document.', lastCheck: serverTimestamp() };
+                        setDeploymentStatus(defaultStatus);
+                        setDoc(statusDocRef, defaultStatus, { merge: true }).catch(console.error);
                     }
                 }, (e) => {
                     console.error('Status Snapshot Error:', e);
-                    setError('Failed to load deployment status.');
                 });
-                
-                // Cleanup listeners on component unmount
+               
                 return () => {
                     unsubscribeAssets();
                     unsubscribeStatus();
                 };
-            }, [db, isAuthReady, userId]); 
+            }, [db, isAuthReady]);
 
             // --- COMPUTED VALUES ---
             const totalAssets = useMemo(() => assetData.length, [assetData]);
@@ -259,15 +243,13 @@
                     const criticalityMultiplier = asset.criticality === 'High' ? 3 : asset.criticality === 'Medium' ? 2 : 1;
                     return sum + (asset.vulnerabilityScore * criticalityMultiplier);
                 }, 0);
-                
-                // Scale based on total assets and max possible score (100 * 3)
-                const maxPossibleScore = totalAssets * 300; 
+               
+                const maxPossibleScore = totalAssets * 300;
                 const normalizedScore = Math.round((totalScore / maxPossibleScore) * 100);
-                
+               
                 return isNaN(normalizedScore) ? 0 : Math.min(100, normalizedScore);
             }, [assetData, totalAssets]);
-
-
+           
             // --- ACTIONS ---
             const handleSignOut = async () => {
                 if (auth) {
@@ -281,12 +263,11 @@
                     }
                 }
             };
-            
+           
             const handleAssetChange = (e) => {
                 const { name, value, type } = e.target;
                 let finalValue = value;
                 if (type === 'number') {
-                    // Ensure number input is correctly parsed and within range
                     let num = parseInt(value, 10);
                     if (isNaN(num)) num = 0;
                     if (name === 'vulnerabilityScore') {
@@ -304,24 +285,28 @@
                     setModal({ type: 'error', message: 'Database connection not ready or user not authenticated.' });
                     return;
                 }
-                
+                if (!isAdmin) {
+                    setModal({ type: 'error', message: 'Permission Denied: Only Admins/Engineers can add new assets.' });
+                    return;
+                }
+               
                 if (!newAsset.name || !newAsset.ipAddress || newAsset.vulnerabilityScore === undefined) {
                     setModal({ type: 'error', message: 'Asset Name, IP Address, and a valid Vulnerability Score are required.' });
                     return;
                 }
-                
+               
                 setIsSaving(true);
                 try {
                     const assetsRef = collection(db, getPublicCollectionPath('assets'));
-                    
+                   
                     const assetToSave = {
                         ...newAsset,
+                        vulnerabilityScore: parseInt(newAsset.vulnerabilityScore, 10),
                         createdAt: serverTimestamp(),
                         createdBy: userId,
                     };
-                    
-                    // Create a new document with an auto-generated ID
-                    await setDoc(doc(assetsRef), assetToSave); 
+                   
+                    await setDoc(doc(assetsRef), assetToSave);
 
                     setNewAsset(initialNewAsset);
                     setModal({ type: 'success', message: `Asset '${newAsset.name}' successfully added.` });
@@ -335,21 +320,21 @@
             };
 
             // --- UI Components ---
-            
+           
             const Modal = ({ type, message, onClose }) => (
                 <div className="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full z-50 flex items-center justify-center">
                     <div className={`relative p-6 max-w-sm mx-auto rounded-xl shadow-2xl transition-all ${
-                        type === 'error' ? 'bg-red-50 border-red-400 text-red-800' : 
-                        type === 'success' ? 'bg-green-50 border-green-400 text-green-800' : 
+                        type === 'error' ? 'bg-red-50 border-red-400 text-red-800' :
+                        type === 'success' ? 'bg-green-50 border-green-400 text-green-800' :
                         'bg-white border-gray-400 text-gray-800'
-                    }`}>
+                    } border`}>
                         <h3 className="text-lg font-semibold mb-2 flex items-center">
                             {type === 'error' ? <X className="w-5 h-5 mr-2" /> : <CheckCircle className="w-5 h-5 mr-2" />}
-                            {type === 'error' ? 'Error' : 'Success'}
+                            {type === 'error' ? 'Notification' : 'Success'}
                         </h3>
                         <p className="text-sm">{message}</p>
-                        <button 
-                            onClick={onClose} 
+                        <button
+                            onClick={onClose}
                             className="mt-4 w-full px-4 py-2 text-sm font-medium rounded-lg text-white bg-indigo-600 hover:bg-indigo-700 transition-colors"
                         >
                             Close
@@ -359,7 +344,7 @@
             );
 
             const Card = ({ title, value, icon, className = '' }) => (
-                <div className={`p-5 bg-white rounded-xl shadow-lg border border-gray-200 flex items-center justify-between ${className}`}>
+                <div className={`p-5 bg-white rounded-xl shadow-lg border border-gray-200 flex items-center justify-between transition-shadow hover:shadow-xl ${className}`}>
                     <div>
                         <p className="text-sm font-medium text-gray-500">{title}</p>
                         <p className="text-3xl font-bold text-gray-900 mt-1">{value}</p>
@@ -370,46 +355,46 @@
                 </div>
             );
 
-            const RiskDashboard = () => (
+            const OverviewDashboard = () => (
                 <div className="space-y-6">
-                    <h2 className="text-3xl font-extrabold text-gray-900 border-b pb-3 mb-6">OT Risk Dashboard</h2>
-                    
-                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-                        <Card 
-                            title="Overall Risk Score" 
-                            value={`${riskScore}%`} 
+                    <h2 className="text-3xl font-extrabold text-gray-900 border-b pb-3 mb-6">Security Overview Dashboard</h2>
+                   
+                    <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                        <Card
+                            title="Overall Risk Score"
+                            value={`${riskScore}%`}
                             icon={<Target className="w-6 h-6" />}
                             className={riskScore > 50 ? 'bg-red-50 border-red-300' : riskScore > 20 ? 'bg-yellow-50 border-yellow-300' : 'bg-green-50 border-green-300'}
                         />
-                        <Card 
-                            title="Total Assets Monitored" 
-                            value={totalAssets} 
-                            icon={<MapPin className="w-6 h-6" />}
+                        <Card
+                            title="Total Assets"
+                            value={totalAssets}
+                            icon={<Layers className="w-6 h-6" />}
                         />
-                        <Card 
-                            title="Assets Requiring Action" 
-                            value={assetsAtRisk} 
+                        <Card
+                            title="High Vulnerability"
+                            value={assetsAtRisk}
                             icon={<AlertTriangle className="w-6 h-6" />}
                             className={assetsAtRisk > 0 ? 'bg-yellow-50 border-yellow-300' : ''}
                         />
-                        <Card 
-                            title="Critical Assets" 
-                            value={criticalAssets} 
-                            icon={<Cpu className="w-6 h-6" />}
+                        <Card
+                            title="Criticality (High)"
+                            value={criticalAssets}
+                            icon={<Zap className="w-6 h-6" />}
                             className={criticalAssets > 0 ? 'bg-red-50 border-red-300' : ''}
                         />
                     </div>
-
-                    <div className="bg-white p-6 rounded-xl shadow-lg">
+                   
+                    <div className="bg-white p-6 rounded-xl shadow-lg border border-gray-200">
                         <h3 className="text-xl font-semibold mb-4 text-gray-800 flex items-center">
                             <BarChart2 className="w-5 h-5 mr-2 text-indigo-500" />
-                            Asset Overview
+                            Recent Asset Inventory
                         </h3>
                         <div className="overflow-x-auto table-responsive">
                             <table className="min-w-full divide-y divide-gray-200">
                                 <thead className="bg-gray-50">
                                     <tr>
-                                        {['Asset Name', 'Type', 'IP Address', 'Criticality', 'Vulnerability Score', 'Date Added'].map(header => (
+                                        {['Asset Name', 'Type', 'IP Address', 'Criticality', 'Vulnerability Score'].map(header => (
                                             <th key={header} className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                                                 {header}
                                             </th>
@@ -417,7 +402,7 @@
                                     </tr>
                                 </thead>
                                 <tbody className="bg-white divide-y divide-gray-200">
-                                    {assetData.length > 0 ? assetData.map((asset) => (
+                                    {assetData.length > 0 ? assetData.slice(0, 5).map((asset) => ( // Show top 5 recent assets
                                         <tr key={asset.id} className="hover:bg-gray-50">
                                             <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">{asset.name}</td>
                                             <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{asset.type}</td>
@@ -436,16 +421,9 @@
                                                     {asset.vulnerabilityScore}
                                                 </span>
                                             </td>
-                                            <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                                                {asset.createdAt?.seconds ? new Date(asset.createdAt.seconds * 1000).toLocaleDateString() : 'N/A'}
-                                            </td>
                                         </tr>
                                     )) : (
-                                        <tr>
-                                            <td colSpan="6" className="px-6 py-4 text-center text-gray-500">
-                                                No OT assets have been added yet. Add one in the Asset Builder tab.
-                                            </td>
-                                        </tr>
+                                        <tr><td colSpan="5" className="px-6 py-4 text-center text-gray-500">No assets found.</td></tr>
                                     )}
                                 </tbody>
                             </table>
@@ -453,161 +431,244 @@
                     </div>
                 </div>
             );
-            
-            const AssetBuilder = () => (
-                <div className="max-w-xl mx-auto space-y-6">
-                    <h2 className="text-3xl font-extrabold text-gray-900 border-b pb-3">Add New OT Asset</h2>
-                    
-                    <div className="bg-white p-6 rounded-xl shadow-lg border border-gray-200">
-                        <form onSubmit={handleSaveAsset} className="space-y-4">
-                            
-                            <InputField 
-                                label="Asset Name" 
-                                name="name" 
-                                value={newAsset.name} 
-                                onChange={handleAssetChange} 
-                                placeholder="e.g., Boiler Control PLC 01"
-                            />
-                            
-                            <InputField 
-                                label="IP Address" 
-                                name="ipAddress" 
-                                value={newAsset.ipAddress} 
-                                onChange={handleAssetChange} 
-                                placeholder="e.g., 192.168.1.100"
-                            />
-                            
-                            <SelectField 
-                                label="Asset Type" 
-                                name="type" 
-                                value={newAsset.type} 
-                                onChange={handleAssetChange}
-                                options={['PLC', 'HMI', 'Workstation', 'Historian', 'Network Switch']}
-                            />
-                            
-                            <SelectField 
-                                label="Criticality" 
-                                name="criticality" 
-                                value={newAsset.criticality} 
-                                onChange={handleAssetChange}
-                                options={['High', 'Medium', 'Low']}
-                            />
+           
+            // --- Asset Management (Manager/Engineer View) ---
+            const AssetManagement = () => {
+                if (!isAdmin) {
+                    return <PermissionDenied viewName="Asset Management" requiredRole="Admin/Engineer" />;
+                }
+               
+                return (
+                    <div className="space-y-8">
+                        <h2 className="text-3xl font-extrabold text-gray-900 border-b pb-3 mb-4">Asset Management & Builder</h2>
+                       
+                        {/* Asset Builder Form (Admin/Engineer only) */}
+                        <div className="max-w-xl mx-auto bg-indigo-50 p-6 rounded-xl shadow-inner border border-indigo-200">
+                            <h3 className="text-xl font-bold text-indigo-700 mb-4 flex items-center"><Cpu className="w-5 h-5 mr-2"/> Add New OT Asset</h3>
+                            <form onSubmit={handleSaveAsset} className="space-y-4">
+                                <InputField label="Asset Name" name="name" value={newAsset.name} onChange={handleAssetChange} placeholder="e.g., Boiler Control PLC 01"/>
+                                <InputField label="IP Address" name="ipAddress" value={newAsset.ipAddress} onChange={handleAssetChange} placeholder="e.g., 192.168.1.100"/>
+                                <SelectField label="Asset Type" name="type" value={newAsset.type} onChange={handleAssetChange}
+                                    options={['PLC', 'HMI', 'Workstation', 'Historian', 'Network Switch', 'Sensor', 'Actuator']}
+                                />
+                                <SelectField label="Criticality" name="criticality" value={newAsset.criticality} onChange={handleAssetChange}
+                                    options={['High', 'Medium', 'Low']}
+                                />
+                                <InputField label="Vulnerability Score (0-100)" name="vulnerabilityScore" type="number" value={newAsset.vulnerabilityScore} onChange={handleAssetChange} min="0" max="100"/>
+                               
+                                <button
+                                    type="submit"
+                                    disabled={isSaving || !db || !userId}
+                                    className="w-full mt-6 py-3 px-4 rounded-lg bg-indigo-600 text-white font-semibold shadow-md hover:bg-indigo-700 transition-colors disabled:bg-indigo-300 flex items-center justify-center"
+                                >
+                                    {isSaving ? (<><Clock className="w-5 h-5 mr-2 animate-spin" />Saving...</>) : (
+                                        <><Cpu className="w-5 h-5 mr-2" />Add Asset to Inventory</>)}
+                                </button>
+                            </form>
+                        </div>
+                       
+                        {/* Full Asset List */}
+                        <div className="bg-white p-6 rounded-xl shadow-lg border border-gray-200">
+                            <h3 className="text-xl font-semibold mb-4 text-gray-800 flex items-center">
+                                <ListTodo className="w-5 h-5 mr-2 text-indigo-500" />
+                                Full Asset Inventory ({totalAssets})
+                            </h3>
+                            <div className="overflow-x-auto table-responsive">
+                                {/* Table structure repeated from dashboard for full list view */}
+                                <table className="min-w-full divide-y divide-gray-200">
+                                    <thead className="bg-gray-50">
+                                        <tr>
+                                            {['Asset Name', 'Type', 'IP Address', 'Criticality', 'Score', 'Location', 'Added'].map(header => (
+                                                <th key={header} className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                                                    {header}
+                                                </th>
+                                            ))}
+                                        </tr>
+                                    </thead>
+                                    <tbody className="bg-white divide-y divide-gray-200">
+                                        {assetData.length > 0 ? assetData.map((asset) => (
+                                            <tr key={asset.id} className="hover:bg-gray-50">
+                                                <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">{asset.name}</td>
+                                                <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{asset.type}</td>
+                                                <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{asset.ipAddress}</td>
+                                                <td className="px-6 py-4 whitespace-nowrap text-sm font-semibold">
+                                                    <span className={`px-2 inline-flex text-xs leading-5 font-semibold rounded-full ${
+                                                        asset.criticality === 'High' ? 'bg-red-100 text-red-800' :
+                                                        asset.criticality === 'Medium' ? 'bg-yellow-100 text-yellow-800' :
+                                                        'bg-green-100 text-green-800'
+                                                    }`}>
+                                                        {asset.criticality}
+                                                    </span>
+                                                </td>
+                                                <td className="px-6 py-4 whitespace-nowrap text-sm font-medium">
+                                                    <span className={`font-bold ${asset.vulnerabilityScore > 50 ? 'text-red-600' : 'text-green-600'}`}>
+                                                        {asset.vulnerabilityScore}
+                                                    </span>
+                                                </td>
+                                                <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{asset.location || 'N/A'}</td>
+                                                <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                                                    {asset.createdAt?.seconds ? new Date(asset.createdAt.seconds * 1000).toLocaleDateString() : 'N/A'}
+                                                </td>
+                                            </tr>
+                                        )) : (
+                                            <tr><td colSpan="7" className="px-6 py-4 text-center text-gray-500">No OT assets have been added yet.</td></tr>
+                                        )}
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                    </div>
+                );
+            };
 
-                            <InputField 
-                                label="Vulnerability Score (0-100)" 
-                                name="vulnerabilityScore" 
-                                type="number"
-                                value={newAsset.vulnerabilityScore} 
-                                onChange={handleAssetChange} 
-                                min="0" 
-                                max="100"
-                            />
-
-                            <button
-                                type="submit"
-                                disabled={isSaving || !db || !userId}
-                                className="w-full mt-6 py-3 px-4 rounded-lg bg-indigo-600 text-white font-semibold shadow-md hover:bg-indigo-700 transition-colors disabled:bg-indigo-300 flex items-center justify-center"
-                            >
-                                {isSaving ? (
-                                    <>
-                                        <Clock className="w-5 h-5 mr-2 animate-spin" />
-                                        Saving...
-                                    </>
-                                ) : (
-                                    <>
-                                        <Cpu className="w-5 h-5 mr-2" />
-                                        Add Asset to Inventory
-                                    </>
-                                )}
-                            </button>
-                        </form>
+            // --- Manager/Compliance View ---
+            const ComplianceManager = () => (
+                <div className="space-y-6">
+                    <h2 className="text-3xl font-extrabold text-gray-900 border-b pb-3 mb-6">Compliance & Controls Manager</h2>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                        <div className="bg-white p-6 rounded-xl shadow-lg border border-gray-200">
+                            <h3 className="text-xl font-semibold mb-3 text-gray-800 flex items-center"><FileText className="w-5 h-5 mr-2 text-green-600" /> Compliance Status</h3>
+                            <p className="text-gray-600 mb-4">Current compliance against ISA/IEC 62443 standard (mock data).</p>
+                            <div className="space-y-3">
+                                <ComplianceItem title="Network Segmentation" status="95% Compliant" color="text-green-600" />
+                                <ComplianceItem title="Access Control" status="78% Compliant" color="text-yellow-600" />
+                                <ComplianceItem title="Patch Management" status="52% Compliant" color="text-red-600" />
+                                <ComplianceItem title="Security Monitoring" status="90% Compliant" color="text-green-600" />
+                            </div>
+                        </div>
+                        <div className="bg-white p-6 rounded-xl shadow-lg border border-gray-200">
+                            <h3 className="text-xl font-semibold mb-3 text-gray-800 flex items-center"><DollarSign className="w-5 h-5 mr-2 text-indigo-600" /> Business Impact Report</h3>
+                            <p className="text-gray-600 mb-4">View security posture from a non-technical, financial perspective.</p>
+                            <ul className="space-y-2 text-sm">
+                                <li className="flex justify-between">Potential Downtime Risk: <span className="font-bold text-red-600">High</span></li>
+                                <li className="flex justify-between">Estimated Annual Loss Exposure (ALE): <span className="font-bold">$2.5M</span></li>
+                                <li className="flex justify-between">Required Control Investment: <span className="font-bold text-indigo-600">$450K</span></li>
+                            </ul>
+                            <button className="mt-4 w-full py-2 bg-indigo-500 text-white rounded-lg hover:bg-indigo-600 transition-colors text-sm">Generate Full Report</button>
+                        </div>
                     </div>
                 </div>
             );
+           
+            const ComplianceItem = ({ title, status, color }) => (
+                <div className="flex justify-between items-center p-3 bg-gray-50 rounded-lg">
+                    <span className="font-medium text-gray-700">{title}</span>
+                    <span className={`font-semibold ${color} flex items-center`}>
+                        <Clock className="w-4 h-4 mr-1"/> {status}
+                    </span>
+                </div>
+            );
 
-            const InputField = ({ label, name, value, onChange, type = 'text', ...props }) => (
-                <div>
-                    <label htmlFor={name} className="block text-sm font-medium text-gray-700">{label}</label>
-                    <input
-                        type={type}
-                        name={name}
-                        id={name}
-                        value={value}
-                        onChange={onChange}
-                        className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-lg shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm"
-                        required
-                        {...props}
+            // --- Remediation/Fix Tasks View ---
+            const RemediationTasks = () => (
+                <div className="space-y-6">
+                    <h2 className="text-3xl font-extrabold text-gray-900 border-b pb-3 mb-6">Remediation & Fix Tasks</h2>
+                   
+                    <div className="bg-white p-6 rounded-xl shadow-lg border border-gray-200">
+                        <h3 className="text-xl font-semibold mb-4 text-gray-800 flex items-center">
+                            <HardHat className="w-5 h-5 mr-2 text-red-500" />
+                            Pending Critical Tasks ({assetsAtRisk})
+                        </h3>
+                        <div className="space-y-3">
+                            {assetData.filter(a => a.vulnerabilityScore > 50).map(asset => (
+                                <TaskItem
+                                    key={asset.id}
+                                    assetName={asset.name}
+                                    score={asset.vulnerabilityScore}
+                                    task={`Patch firmware on ${asset.type} (${asset.ipAddress})`}
+                                />
+                            ))}
+                            {assetsAtRisk === 0 && <p className="text-gray-500 p-3 text-center">Great! No critical remediation tasks required right now.</p>}
+                        </div>
+                    </div>
+                   
+                    <ViewPlaceholder
+                        title="Task Assignment & Tracking"
+                        icon={<ListTodo className="w-8 h-8 text-indigo-500" />}
+                        message="Future feature: Assign these tasks to engineers, track progress, and update status in real-time."
                     />
                 </div>
             );
 
-            const SelectField = ({ label, name, value, onChange, options, ...props }) => (
-                <div>
-                    <label htmlFor={name} className="block text-sm font-medium text-gray-700">{label}</label>
-                    <select
-                        name={name}
-                        id={name}
-                        value={value}
-                        onChange={onChange}
-                        className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-lg shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm bg-white"
-                        {...props}
-                    >
-                        {options.map(option => (
-                            <option key={option} value={option}>{option}</option>
-                        ))}
-                    </select>
+            const TaskItem = ({ assetName, task, score }) => (
+                <div className="p-4 bg-yellow-50 rounded-lg border border-yellow-200 flex justify-between items-center shadow-sm hover:shadow-md transition-shadow">
+                    <div className="flex-1">
+                        <p className="font-semibold text-yellow-800">{task}</p>
+                        <p className="text-xs text-yellow-700 mt-1">Asset: {assetName}</p>
+                    </div>
+                    <span className="px-3 py-1 bg-red-500 text-white text-xs font-bold rounded-full">Score: {score}</span>
                 </div>
             );
 
-            // Placeholder Views
-            const SecurityControls = () => (
-                <ViewPlaceholder 
-                    title="Security Controls Management" 
-                    icon={<CheckCircle className="w-8 h-8 text-indigo-500" />}
-                    message="View and manage the status of security controls (e.g., patching, authentication, network segmentation) across all OT assets. Future iteration will allow marking controls as compliant."
-                />
-            );
 
-            const RemediationTasks = () => (
-                <ViewPlaceholder 
-                    title="Remediation Task Queue" 
-                    icon={<HardHat className="w-8 h-8 text-indigo-500" />}
-                    message="Track and assign remediation tasks generated from high-risk assets and failed security controls. Focus on closing the vulnerability gaps."
-                />
-            );
-
-            const AdminView = () => {
+            // --- Admin Console (Engineer/Admin Only) ---
+            const AdminConsole = () => {
                 if (!isAdmin) {
-                    return <ViewPlaceholder 
-                        title="Access Denied" 
-                        icon={<User className="w-8 h-8 text-red-500" />}
-                        message="You must be an administrator to access this view. Your current User ID does not match the hardcoded admin UIDs."
-                    />;
+                    return <PermissionDenied viewName="Admin Console" requiredRole="Admin/Engineer" />;
                 }
-                
+               
                 return (
                     <div className="space-y-6">
-                        <h2 className="text-3xl font-extrabold text-gray-900 border-b pb-3">Admin Panel</h2>
-                        <div className="bg-white p-6 rounded-xl shadow-lg border border-gray-200">
-                            <h3 className="text-xl font-semibold mb-3 text-gray-800 flex items-center"><Settings className="w-5 h-5 mr-2" /> System Information</h3>
-                            <p className="text-sm text-gray-600">
-                                This panel is reserved for privileged users (Admin/Engineer). 
-                                Functionality includes advanced system checks and configuration settings.
-                            </p>
-                            <ul className="mt-4 space-y-2 text-sm">
-                                <li className="font-mono bg-gray-50 p-2 rounded-lg break-all">App ID: <span className="font-semibold text-indigo-700">{appId}</span></li>
-                                <li className="font-mono bg-gray-50 p-2 rounded-lg break-all">Current User ID: <span className="font-semibold text-green-700">{userId}</span></li>
-                                <li className="font-mono bg-gray-50 p-2 rounded-lg break-all">Admin UIDs: <span className="text-red-700">{ADMIN_UIDS.join(', ')}</span></li>
-                            </ul>
+                        <h2 className="text-3xl font-extrabold text-gray-900 border-b pb-3">Admin Console (Privileged System Settings)</h2>
+                       
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                           
+                            {/* System Info Card */}
+                            <div className="bg-white p-6 rounded-xl shadow-lg border border-gray-200">
+                                <h3 className="text-xl font-semibold mb-3 text-gray-800 flex items-center"><Settings className="w-5 h-5 mr-2" /> System Configuration</h3>
+                                <p className="text-sm text-gray-600 mb-4">View critical application identifiers and user roles for troubleshooting.</p>
+                                <ul className="mt-4 space-y-2 text-sm">
+                                    <li className="font-mono bg-gray-50 p-2 rounded-lg break-all">App ID: <span className="font-semibold text-indigo-700">{appId}</span></li>
+                                    <li className="font-mono bg-gray-50 p-2 rounded-lg break-all">Auth Token: <span className="font-semibold text-indigo-700">{initialAuthToken ? 'Present' : 'N/A'}</span></li>
+                                    <li className="font-mono bg-gray-50 p-2 rounded-lg break-all">Configured Admin UIDs: <span className="text-red-700">{ADMIN_UIDS.join(', ')}</span></li>
+                                </ul>
+                            </div>
+                           
+                            {/* User List Mockup */}
+                            <div className="bg-white p-6 rounded-xl shadow-lg border border-gray-200">
+                                <h3 className="text-xl font-semibold mb-3 text-gray-800 flex items-center"><Users className="w-5 h-5 mr-2" /> Current Session Users</h3>
+                                <p className="text-sm text-gray-600 mb-4">List of current authenticated users in the application's context.</p>
+                                <ul className="space-y-2 text-sm">
+                                    {/* Mock user list including current user */}
+                                    <UserListItem uid={userId} role={isAdmin ? 'Admin/Engineer' : isManager ? 'Manager' : 'Viewer'} isCurrent={true} />
+                                    <UserListItem uid={'ZP6wE0ha6FWY9G4wJGXaVhRHioj2'} role={'Admin/Engineer'} isCurrent={false} />
+                                    <UserListItem uid={'User_Viewer_12345'} role={'Viewer'} isCurrent={false} />
+                                </ul>
+                            </div>
                         </div>
-                        <ViewPlaceholder 
-                            title="Audit Log Access" 
+                       
+                        <ViewPlaceholder
+                            title="Audit Log Access"
                             icon={<BookOpen className="w-8 h-8 text-indigo-500" />}
-                            message="Access detailed logs and audit trails for all user and system actions (not fully implemented in this demo)."
+                            message="Access detailed logs and audit trails for all user and system actions."
                         />
                     </div>
                 );
             };
+
+            const UserListItem = ({ uid, role, isCurrent }) => (
+                <li className={`p-2 rounded-lg border flex justify-between items-center ${isCurrent ? 'bg-indigo-50 border-indigo-300' : 'bg-gray-50 border-gray-200'}`}>
+                    <span className="font-mono text-xs break-all flex-1 pr-2">{uid}</span>
+                    <span className={`px-2 py-0.5 text-xs font-semibold rounded-full ${
+                        role === 'Admin/Engineer' ? 'bg-red-100 text-red-800' :
+                        role === 'Manager' ? 'bg-blue-100 text-blue-800' :
+                        'bg-gray-100 text-gray-800'
+                    }`}>
+                        {role} {isCurrent && '(You)'}
+                    </span>
+                </li>
+            );
+
+            const PermissionDenied = ({ viewName, requiredRole }) => (
+                <div className="flex flex-col items-center justify-center p-12 bg-red-50 rounded-xl shadow-lg border-2 border-red-300">
+                    <AlertTriangle className="w-12 h-12 text-red-600 mb-4" />
+                    <h3 className="text-2xl font-bold text-red-800 mb-2">Access Restricted to {viewName}</h3>
+                    <p className="text-red-700 text-center max-w-md">
+                        You do not have the required role ({requiredRole}) to view or edit this content.
+                        Your current session ID is **{userId || 'N/A'}**.
+                    </p>
+                </div>
+            );
 
             const ViewPlaceholder = ({ title, icon, message }) => (
                 <div className="flex flex-col items-center justify-center p-12 bg-white rounded-xl shadow-lg border border-gray-200">
@@ -621,22 +682,22 @@
 
             const renderView = () => {
                 switch (currentView) {
-                    case 'riskDashboard':
-                        return <RiskDashboard />;
-                    case 'assetBuilder':
-                        return <AssetBuilder />;
-                    case 'securityControls':
-                        return <SecurityControls />;
+                    case 'overview':
+                        return <OverviewDashboard />;
+                    case 'assetManagement':
+                        return <AssetManagement />;
+                    case 'complianceManager':
+                        return <ComplianceManager />;
                     case 'remediationTasks':
                         return <RemediationTasks />;
-                    case 'admin':
-                        return <AdminView />;
+                    case 'adminConsole':
+                        return <AdminConsole />;
                     default:
-                        return <RiskDashboard />;
+                        return <OverviewDashboard />;
                 }
             };
 
-            // Loading and Error States
+            // Loading and Error States (Unchanged)
             if (loading) {
                 return (
                     <div className="flex flex-col items-center justify-center min-h-screen text-indigo-600">
@@ -656,17 +717,18 @@
                         <AlertTriangle className="w-12 h-12 text-red-600 mb-4" />
                         <h1 className="text-2xl font-bold text-red-800">Application Error</h1>
                         <p className="text-red-700 mt-2 text-center max-w-xl">{error}</p>
-                        <p className="text-sm text-red-500 mt-4">User ID: {userId || 'N/A'}</p>
+                        <p className="text-sm text-red-500 mt-4">Current User ID: {userId || 'N/A'}</p>
                     </div>
                 );
             }
 
+            // Main App Render
             return (
                 <div className="min-h-screen">
                     {modal && <Modal type={modal.type} message={modal.message} onClose={() => setModal(null)} />}
                     <div className="max-w-7xl mx-auto py-6 sm:px-6 lg:px-8">
                         {/* Header and User Info */}
-                        <header className="flex justify-between items-center p-4 bg-white shadow-md rounded-xl mb-4 print-hide">
+                        <header className="flex justify-between items-center p-4 bg-white shadow-xl rounded-xl mb-6 print-hide">
                             <h1 className="text-2xl font-bold text-indigo-700 flex items-center">
                                 <Shield className="w-6 h-6 mr-2" />
                                 OT Guardian Console
@@ -675,11 +737,13 @@
                                 <div className="text-right text-sm">
                                     <p className="font-semibold text-gray-900">User ID:</p>
                                     <p className="font-mono text-xs text-gray-600 truncate max-w-[150px] sm:max-w-none">{userId || 'N/A'}</p>
+                                    {isAdmin && <p className="text-xs font-bold text-red-500">ADMIN/ENGINEER</p>}
+                                    {isManager && !isAdmin && <p className="text-xs font-bold text-blue-500">MANAGER</p>}
                                 </div>
                                 {userId && (
-                                    <button 
-                                        onClick={handleSignOut} 
-                                        className="p-2 rounded-full bg-red-100 text-red-600 hover:bg-red-200 transition-colors shadow-sm flex items-center justify-center group"
+                                    <button
+                                        onClick={handleSignOut}
+                                        className="p-3 rounded-full bg-red-100 text-red-600 hover:bg-red-200 transition-colors shadow-sm flex items-center justify-center group"
                                         aria-label="Sign Out"
                                     >
                                         <LogOut className='w-5 h-5 group-hover:rotate-12 transition-transform' />
@@ -689,13 +753,14 @@
                         </header>
 
                         {/* Navigation Bar */}
-                        <nav className="flex space-x-1 p-3 border-b bg-white rounded-xl shadow-md overflow-x-auto whitespace-nowrap mb-6 print-hide">
+                        <nav className="flex space-x-1 p-3 bg-white rounded-xl shadow-md overflow-x-auto whitespace-nowrap mb-6 print-hide">
                             {[
-                                { view: 'riskDashboard', label: 'Risk Dashboard', icon: <Shield className="w-4 h-4 mr-2" /> },
-                                { view: 'assetBuilder', label: 'Asset Builder', icon: <Cpu className="w-4 h-4 mr-2" /> },
-                                { view: 'securityControls', label: 'Controls', icon: <CheckCircle className="w-4 h-4 mr-2" /> },
-                                { view: 'remediationTasks', label: 'Remediation', icon: <HardHat className="w-4 h-4 mr-2" /> },
-                                ...(isAdmin ? [{ view: 'admin', label: 'Admin', icon: <User className="w-4 h-4 mr-2" /> }] : []),
+                                { view: 'overview', label: 'Overview', icon: <TrendingUp className="w-4 h-4 mr-2" /> },
+                                { view: 'assetManagement', label: 'Asset Management', icon: <Cpu className="w-4 h-4 mr-2" /> },
+                                { view: 'complianceManager', label: 'Compliance', icon: <FileText className="w-4 h-4 mr-2" /> },
+                                { view: 'remediationTasks', label: 'Fix Tasks', icon: <HardHat className="w-4 h-4 mr-2" /> },
+                                // Admin Console is conditionally displayed
+                                ...(isAdmin ? [{ view: 'adminConsole', label: 'Admin Console', icon: <Settings className="w-4 h-4 mr-2" /> }] : []),
                             ].map(item => (
                                 <button
                                     key={item.view}
@@ -712,12 +777,12 @@
 
                         {/* Deployment Status Bar */}
                         <div className={`p-3 text-sm font-semibold rounded-xl text-center shadow-md mb-6 ${
-                            deploymentStatus?.status === 'Online' ? 'bg-green-100 text-green-800 border-2 border-green-300' : 
-                            deploymentStatus?.status === 'Warning' ? 'bg-yellow-100 text-yellow-800 border-2 border-yellow-300' : 
+                            deploymentStatus?.status === 'Online' ? 'bg-green-100 text-green-800 border-2 border-green-300' :
+                            deploymentStatus?.status === 'Warning' ? 'bg-yellow-100 text-yellow-800 border-2 border-yellow-300' :
                             'bg-red-100 text-red-800 border-2 border-red-300'
                         } print-hide`}>
                             <Zap className="w-4 h-4 inline mr-1" />
-                            Deployment Status: {deploymentStatus?.status || 'Loading...'} | 
+                            Deployment Status: {deploymentStatus?.status || 'Loading...'} |
                             Last Check: {deploymentStatus?.lastCheck?.seconds ? new Date(deploymentStatus.lastCheck.seconds * 1000).toLocaleString() : 'N/A'}
                         </div>
 

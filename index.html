@@ -1,0 +1,739 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>OT Guardian Console (Single-File)</title>
+    <!-- Load Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    
+    <!-- Load React, ReactDOM, and Babel -->
+    <script crossorigin src="https://unpkg.com/react@18/umd/react.development.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    
+    <!-- Load Lucide Icons - Required for all the UI icons -->
+    <script src="https://unpkg.com/lucide-react@0.292.0/dist/umd/lucide-react.min.js"></script>
+
+    <!-- Load Firebase SDKs and expose them globally -->
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged, signOut } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getFirestore, doc, setDoc, collection, query, onSnapshot, serverTimestamp, setLogLevel } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+
+        // --- GLOBAL SETUP: Making Firebase functions available for the Babel script ---
+        window.initializeApp = initializeApp;
+        window.getAuth = getAuth;
+        window.signInAnonymously = signInAnonymously;
+        window.signInWithCustomToken = signInWithCustomToken;
+        window.onAuthStateChanged = onAuthStateChanged;
+        window.signOut = signOut;
+        window.getFirestore = getFirestore;
+        window.doc = doc;
+        window.setDoc = setDoc;
+        window.collection = collection;
+        window.query = query;
+        window.onSnapshot = onSnapshot;
+        window.serverTimestamp = serverTimestamp;
+        window.setLogLevel = setLogLevel;
+        
+        // 2. Configuration Variables: Uses Canvas globals if available, otherwise uses hardcoded config for deployment.
+        // NOTE: The Firebase config MUST be the full object structure.
+        const configPlaceholder = {
+            apiKey: "AIzaSyAyDKqA-j9yjp4KeGPGR49Cr6_q_drxBVs", // Replace with your actual key for Vercel
+            authDomain: "otgaurdian.firebaseapp.com",
+            projectId: "otgaurdian",
+            storageBucket: "otgaurdian.firebasestorage.app",
+            messagingSenderId: "719542806938",
+            appId: "1:719542806938:web:ed9376fcc7d04851e47223",
+            measurementId: "G-9FMPGC5C93"
+        };
+        
+        window.__app_id = typeof __app_id !== 'undefined' ? __app_id : configPlaceholder.appId;
+        window.__firebase_config = typeof __firebase_config !== 'undefined' ? __firebase_config : JSON.stringify(configPlaceholder);
+        // The initial auth token is for Canvas only; default to null for standard deployment
+        window.__initial_auth_token = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null; 
+
+        // 3. Expose Lucide Icons globally
+        if (typeof lucideReact !== 'undefined') {
+            const icons = lucideReact.icons;
+            for (const key in icons) {
+                if (icons.hasOwnProperty(key)) {
+                    window[key] = icons[key];
+                }
+            }
+        }
+    </script>
+    
+    <!-- Print/PDF Optimization -->
+    <style>
+        @media print {
+            /* Hide navigation and controls for clean printing */
+            .print-hide { display: none !important; }
+            /* Ensure content takes full width */
+            .print-full { max-width: none !important; margin: 0 !important; padding: 0 !important; }
+            /* Remove background color */
+            body, .bg-gray-100 { background-color: white !important; }
+            /* Force table cells to break for smaller print pages */
+            .table-responsive td, .table-responsive th { white-space: normal !important; }
+        }
+    </style>
+</head>
+<body class="bg-gray-100 min-h-screen font-sans">
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState, useEffect, useMemo, useCallback } = React;
+        
+        // IMPORTANT: Firebase imports and constants are now exposed globally by the module script above
+        const { 
+            initializeApp, getAuth, signInAnonymously, signInWithCustomToken, 
+            onAuthStateChanged, signOut, getFirestore, doc, setDoc, 
+            collection, query, onSnapshot, serverTimestamp, setLogLevel 
+        } = window;
+        
+        // Also import the Lucide icons from the global window object
+        const { 
+            X, CheckCircle, AlertTriangle, Cpu, HardHat, BarChart2, Shield, 
+            Settings, User, BookOpen, Clock, Zap, Target, MapPin, Users, 
+            Filter, ArrowDownUp, LogOut, ChevronDown 
+        } = window;
+
+        // --- CONFIGURATION CHECK & CONSTANTS ---
+        const firebaseConfig = window.__firebase_config ? JSON.parse(window.__firebase_config) : {};
+        const appId = window.__app_id || 'default-app-id';
+        const initialAuthToken = window.__initial_auth_token;
+        
+        // Hardcoded Admin and Engineer UIDs for client-side access control
+        // NOTE: This is client-side only. Firestore security relies on security rules.
+        const ADMIN_UIDS = [
+            'ZP6wE0ha6FWY9G4wJGXaVhRHioj2', // Admin User 1
+            'JzUrZlEonaPM59hJEEM3waNzNOk2'  // Admin User 2 (or Engineer)
+        ];
+
+        // Firestore paths for Public Data
+        const getPublicCollectionPath = (collectionName) => 
+            `artifacts/${appId}/public/data/${collectionName}`;
+
+        const App = () => {
+            // State for Firebase and Auth
+            const [db, setDb] = useState(null);
+            const [auth, setAuth] = useState(null);
+            const [userId, setUserId] = useState(null);
+            const [isAuthReady, setIsAuthReady] = useState(false);
+            const [isAdmin, setIsAdmin] = useState(false); // Tracks if the user is one of the hardcoded UIDs
+
+            // App Data State
+            const [currentView, setCurrentView] = useState('riskDashboard');
+            const [assetData, setAssetData] = useState([]); // List of assets
+            const [deploymentStatus, setDeploymentStatus] = useState(null); // Single deployment status object
+            const [loading, setLoading] = useState(true);
+            const [error, setError] = useState(null);
+            const [modal, setModal] = useState(null); // { type: 'error' | 'success', message: '...' }
+
+            // Asset Builder State
+            const initialNewAsset = {
+                name: '',
+                type: 'PLC',
+                ipAddress: '',
+                location: '',
+                criticality: 'High',
+                vulnerabilityScore: 0,
+                lastMaintenance: new Date().toISOString().split('T')[0],
+                controls: {}, 
+            };
+            const [newAsset, setNewAsset] = useState(initialNewAsset);
+            const [isSaving, setIsSaving] = useState(false);
+
+            // --- FIREBASE INITIALIZATION & AUTHENTICATION ---
+            useEffect(() => {
+                if (!firebaseConfig || !firebaseConfig.projectId) {
+                    setError('Firebase configuration is missing or incomplete.');
+                    setLoading(false);
+                    return;
+                }
+                
+                // 1. Initialize Firebase
+                try {
+                    setLogLevel('debug');
+                    const firebaseApp = initializeApp(firebaseConfig);
+                    const firestoreDb = getFirestore(firebaseApp);
+                    const firebaseAuth = getAuth(firebaseApp);
+
+                    setDb(firestoreDb);
+                    setAuth(firebaseAuth);
+
+                    // 2. Handle Authentication
+                    const handleAuth = async () => {
+                        try {
+                            // Check for the Canvas initial token first
+                            if (initialAuthToken) {
+                                console.log("Signing in with custom token (Canvas environment).");
+                                await signInWithCustomToken(firebaseAuth, initialAuthToken);
+                            } else {
+                                // Fallback for standard deployment (Vercel) - Anonymous sign-in
+                                console.log("Signing in anonymously (standard deployment).");
+                                await signInAnonymously(firebaseAuth);
+                            }
+                        } catch (e) {
+                            console.error('Authentication Error:', e);
+                            setError(`Authentication failed: ${e.message}`);
+                        }
+                    };
+
+                    handleAuth();
+
+                    // 3. Set up Auth State Listener
+                    const unsubscribe = onAuthStateChanged(firebaseAuth, (user) => {
+                        if (user) {
+                            setUserId(user.uid);
+                            // Check if the current user ID is in the defined Admin UIDs array
+                            setIsAdmin(ADMIN_UIDS.includes(user.uid));
+                        } else {
+                            setUserId(null);
+                            setIsAdmin(false);
+                        }
+                        setIsAuthReady(true);
+                        setLoading(false);
+                    });
+
+                    return () => unsubscribe();
+                } catch (e) {
+                    console.error('Firebase Initialization Error:', e);
+                    setError(`Firebase setup error: ${e.message}`);
+                    setLoading(false);
+                }
+            }, []);
+
+            // --- FIRESTORE DATA LISTENERS (REAL-TIME DATA) ---
+            useEffect(() => {
+                if (!db || !isAuthReady || !userId) return;
+
+                // 1. Listen to Asset Data (Public Collection for shared data)
+                const assetCollectionRef = collection(db, getPublicCollectionPath('assets'));
+                const qAssets = query(assetCollectionRef);
+                
+                const unsubscribeAssets = onSnapshot(qAssets, (snapshot) => {
+                    const fetchedAssets = snapshot.docs.map(doc => ({
+                        id: doc.id,
+                        ...doc.data()
+                    }));
+                    setAssetData(fetchedAssets.sort((a, b) => (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0)));
+                }, (e) => {
+                    console.error('Assets Snapshot Error:', e);
+                    setError('Failed to load asset data. Check console for details.');
+                });
+
+                // 2. Listen to Deployment Status (Public Document, ID 'global')
+                const statusDocRef = doc(db, getPublicCollectionPath('status'), 'global');
+                
+                const unsubscribeStatus = onSnapshot(statusDocRef, (docSnapshot) => {
+                    if (docSnapshot.exists()) {
+                        setDeploymentStatus(docSnapshot.data());
+                    } else {
+                        // Default state if status document doesn't exist
+                        setDeploymentStatus({ status: 'Offline', message: 'No global status document found.', lastCheck: serverTimestamp() });
+                        // Optionally create it if it doesn't exist
+                        setDoc(statusDocRef, { status: 'Unknown', message: 'Initialized document.', lastCheck: serverTimestamp() }, { merge: true }).catch(console.error);
+                    }
+                }, (e) => {
+                    console.error('Status Snapshot Error:', e);
+                    setError('Failed to load deployment status.');
+                });
+                
+                // Cleanup listeners on component unmount
+                return () => {
+                    unsubscribeAssets();
+                    unsubscribeStatus();
+                };
+            }, [db, isAuthReady, userId]); 
+
+            // --- COMPUTED VALUES ---
+            const totalAssets = useMemo(() => assetData.length, [assetData]);
+            const assetsAtRisk = useMemo(() => assetData.filter(a => a.vulnerabilityScore > 50).length, [assetData]);
+            const criticalAssets = useMemo(() => assetData.filter(a => a.criticality === 'High').length, [assetData]);
+
+            const riskScore = useMemo(() => {
+                if (totalAssets === 0) return 0;
+                const totalScore = assetData.reduce((sum, asset) => {
+                    const criticalityMultiplier = asset.criticality === 'High' ? 3 : asset.criticality === 'Medium' ? 2 : 1;
+                    return sum + (asset.vulnerabilityScore * criticalityMultiplier);
+                }, 0);
+                
+                // Scale based on total assets and max possible score (100 * 3)
+                const maxPossibleScore = totalAssets * 300; 
+                const normalizedScore = Math.round((totalScore / maxPossibleScore) * 100);
+                
+                return isNaN(normalizedScore) ? 0 : Math.min(100, normalizedScore);
+            }, [assetData, totalAssets]);
+
+
+            // --- ACTIONS ---
+            const handleSignOut = async () => {
+                if (auth) {
+                    try {
+                        await signOut(auth);
+                        setUserId(null);
+                        setModal({ type: 'success', message: 'You have been successfully signed out.' });
+                    } catch (e) {
+                        console.error('Sign Out Error:', e);
+                        setModal({ type: 'error', message: 'Failed to sign out.' });
+                    }
+                }
+            };
+            
+            const handleAssetChange = (e) => {
+                const { name, value, type } = e.target;
+                let finalValue = value;
+                if (type === 'number') {
+                    // Ensure number input is correctly parsed and within range
+                    let num = parseInt(value, 10);
+                    if (isNaN(num)) num = 0;
+                    if (name === 'vulnerabilityScore') {
+                        finalValue = Math.max(0, Math.min(100, num));
+                    } else {
+                        finalValue = num;
+                    }
+                }
+                setNewAsset(prev => ({ ...prev, [name]: finalValue }));
+            };
+
+            const handleSaveAsset = async (e) => {
+                e.preventDefault();
+                if (!db || !userId) {
+                    setModal({ type: 'error', message: 'Database connection not ready or user not authenticated.' });
+                    return;
+                }
+                
+                if (!newAsset.name || !newAsset.ipAddress || newAsset.vulnerabilityScore === undefined) {
+                    setModal({ type: 'error', message: 'Asset Name, IP Address, and a valid Vulnerability Score are required.' });
+                    return;
+                }
+                
+                setIsSaving(true);
+                try {
+                    const assetsRef = collection(db, getPublicCollectionPath('assets'));
+                    
+                    const assetToSave = {
+                        ...newAsset,
+                        createdAt: serverTimestamp(),
+                        createdBy: userId,
+                    };
+                    
+                    // Create a new document with an auto-generated ID
+                    await setDoc(doc(assetsRef), assetToSave); 
+
+                    setNewAsset(initialNewAsset);
+                    setModal({ type: 'success', message: `Asset '${newAsset.name}' successfully added.` });
+
+                } catch (e) {
+                    console.error('Error adding document: ', e);
+                    setModal({ type: 'error', message: `Failed to save asset: ${e.message}` });
+                } finally {
+                    setIsSaving(false);
+                }
+            };
+
+            // --- UI Components ---
+            
+            const Modal = ({ type, message, onClose }) => (
+                <div className="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full z-50 flex items-center justify-center">
+                    <div className={`relative p-6 max-w-sm mx-auto rounded-xl shadow-2xl transition-all ${
+                        type === 'error' ? 'bg-red-50 border-red-400 text-red-800' : 
+                        type === 'success' ? 'bg-green-50 border-green-400 text-green-800' : 
+                        'bg-white border-gray-400 text-gray-800'
+                    }`}>
+                        <h3 className="text-lg font-semibold mb-2 flex items-center">
+                            {type === 'error' ? <X className="w-5 h-5 mr-2" /> : <CheckCircle className="w-5 h-5 mr-2" />}
+                            {type === 'error' ? 'Error' : 'Success'}
+                        </h3>
+                        <p className="text-sm">{message}</p>
+                        <button 
+                            onClick={onClose} 
+                            className="mt-4 w-full px-4 py-2 text-sm font-medium rounded-lg text-white bg-indigo-600 hover:bg-indigo-700 transition-colors"
+                        >
+                            Close
+                        </button>
+                    </div>
+                </div>
+            );
+
+            const Card = ({ title, value, icon, className = '' }) => (
+                <div className={`p-5 bg-white rounded-xl shadow-lg border border-gray-200 flex items-center justify-between ${className}`}>
+                    <div>
+                        <p className="text-sm font-medium text-gray-500">{title}</p>
+                        <p className="text-3xl font-bold text-gray-900 mt-1">{value}</p>
+                    </div>
+                    <div className="text-indigo-500 bg-indigo-100 p-3 rounded-full">
+                        {icon}
+                    </div>
+                </div>
+            );
+
+            const RiskDashboard = () => (
+                <div className="space-y-6">
+                    <h2 className="text-3xl font-extrabold text-gray-900 border-b pb-3 mb-6">OT Risk Dashboard</h2>
+                    
+                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+                        <Card 
+                            title="Overall Risk Score" 
+                            value={`${riskScore}%`} 
+                            icon={<Target className="w-6 h-6" />}
+                            className={riskScore > 50 ? 'bg-red-50 border-red-300' : riskScore > 20 ? 'bg-yellow-50 border-yellow-300' : 'bg-green-50 border-green-300'}
+                        />
+                        <Card 
+                            title="Total Assets Monitored" 
+                            value={totalAssets} 
+                            icon={<MapPin className="w-6 h-6" />}
+                        />
+                        <Card 
+                            title="Assets Requiring Action" 
+                            value={assetsAtRisk} 
+                            icon={<AlertTriangle className="w-6 h-6" />}
+                            className={assetsAtRisk > 0 ? 'bg-yellow-50 border-yellow-300' : ''}
+                        />
+                        <Card 
+                            title="Critical Assets" 
+                            value={criticalAssets} 
+                            icon={<Cpu className="w-6 h-6" />}
+                            className={criticalAssets > 0 ? 'bg-red-50 border-red-300' : ''}
+                        />
+                    </div>
+
+                    <div className="bg-white p-6 rounded-xl shadow-lg">
+                        <h3 className="text-xl font-semibold mb-4 text-gray-800 flex items-center">
+                            <BarChart2 className="w-5 h-5 mr-2 text-indigo-500" />
+                            Asset Overview
+                        </h3>
+                        <div className="overflow-x-auto table-responsive">
+                            <table className="min-w-full divide-y divide-gray-200">
+                                <thead className="bg-gray-50">
+                                    <tr>
+                                        {['Asset Name', 'Type', 'IP Address', 'Criticality', 'Vulnerability Score', 'Date Added'].map(header => (
+                                            <th key={header} className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                                                {header}
+                                            </th>
+                                        ))}
+                                    </tr>
+                                </thead>
+                                <tbody className="bg-white divide-y divide-gray-200">
+                                    {assetData.length > 0 ? assetData.map((asset) => (
+                                        <tr key={asset.id} className="hover:bg-gray-50">
+                                            <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">{asset.name}</td>
+                                            <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{asset.type}</td>
+                                            <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{asset.ipAddress}</td>
+                                            <td className="px-6 py-4 whitespace-nowrap text-sm font-semibold">
+                                                <span className={`px-2 inline-flex text-xs leading-5 font-semibold rounded-full ${
+                                                    asset.criticality === 'High' ? 'bg-red-100 text-red-800' :
+                                                    asset.criticality === 'Medium' ? 'bg-yellow-100 text-yellow-800' :
+                                                    'bg-green-100 text-green-800'
+                                                }`}>
+                                                    {asset.criticality}
+                                                </span>
+                                            </td>
+                                            <td className="px-6 py-4 whitespace-nowrap text-sm font-medium">
+                                                <span className={`font-bold ${asset.vulnerabilityScore > 50 ? 'text-red-600' : 'text-green-600'}`}>
+                                                    {asset.vulnerabilityScore}
+                                                </span>
+                                            </td>
+                                            <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                                                {asset.createdAt?.seconds ? new Date(asset.createdAt.seconds * 1000).toLocaleDateString() : 'N/A'}
+                                            </td>
+                                        </tr>
+                                    )) : (
+                                        <tr>
+                                            <td colSpan="6" className="px-6 py-4 text-center text-gray-500">
+                                                No OT assets have been added yet. Add one in the Asset Builder tab.
+                                            </td>
+                                        </tr>
+                                    )}
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+            );
+            
+            const AssetBuilder = () => (
+                <div className="max-w-xl mx-auto space-y-6">
+                    <h2 className="text-3xl font-extrabold text-gray-900 border-b pb-3">Add New OT Asset</h2>
+                    
+                    <div className="bg-white p-6 rounded-xl shadow-lg border border-gray-200">
+                        <form onSubmit={handleSaveAsset} className="space-y-4">
+                            
+                            <InputField 
+                                label="Asset Name" 
+                                name="name" 
+                                value={newAsset.name} 
+                                onChange={handleAssetChange} 
+                                placeholder="e.g., Boiler Control PLC 01"
+                            />
+                            
+                            <InputField 
+                                label="IP Address" 
+                                name="ipAddress" 
+                                value={newAsset.ipAddress} 
+                                onChange={handleAssetChange} 
+                                placeholder="e.g., 192.168.1.100"
+                            />
+                            
+                            <SelectField 
+                                label="Asset Type" 
+                                name="type" 
+                                value={newAsset.type} 
+                                onChange={handleAssetChange}
+                                options={['PLC', 'HMI', 'Workstation', 'Historian', 'Network Switch']}
+                            />
+                            
+                            <SelectField 
+                                label="Criticality" 
+                                name="criticality" 
+                                value={newAsset.criticality} 
+                                onChange={handleAssetChange}
+                                options={['High', 'Medium', 'Low']}
+                            />
+
+                            <InputField 
+                                label="Vulnerability Score (0-100)" 
+                                name="vulnerabilityScore" 
+                                type="number"
+                                value={newAsset.vulnerabilityScore} 
+                                onChange={handleAssetChange} 
+                                min="0" 
+                                max="100"
+                            />
+
+                            <button
+                                type="submit"
+                                disabled={isSaving || !db || !userId}
+                                className="w-full mt-6 py-3 px-4 rounded-lg bg-indigo-600 text-white font-semibold shadow-md hover:bg-indigo-700 transition-colors disabled:bg-indigo-300 flex items-center justify-center"
+                            >
+                                {isSaving ? (
+                                    <>
+                                        <Clock className="w-5 h-5 mr-2 animate-spin" />
+                                        Saving...
+                                    </>
+                                ) : (
+                                    <>
+                                        <Cpu className="w-5 h-5 mr-2" />
+                                        Add Asset to Inventory
+                                    </>
+                                )}
+                            </button>
+                        </form>
+                    </div>
+                </div>
+            );
+
+            const InputField = ({ label, name, value, onChange, type = 'text', ...props }) => (
+                <div>
+                    <label htmlFor={name} className="block text-sm font-medium text-gray-700">{label}</label>
+                    <input
+                        type={type}
+                        name={name}
+                        id={name}
+                        value={value}
+                        onChange={onChange}
+                        className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-lg shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm"
+                        required
+                        {...props}
+                    />
+                </div>
+            );
+
+            const SelectField = ({ label, name, value, onChange, options, ...props }) => (
+                <div>
+                    <label htmlFor={name} className="block text-sm font-medium text-gray-700">{label}</label>
+                    <select
+                        name={name}
+                        id={name}
+                        value={value}
+                        onChange={onChange}
+                        className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-lg shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm bg-white"
+                        {...props}
+                    >
+                        {options.map(option => (
+                            <option key={option} value={option}>{option}</option>
+                        ))}
+                    </select>
+                </div>
+            );
+
+            // Placeholder Views
+            const SecurityControls = () => (
+                <ViewPlaceholder 
+                    title="Security Controls Management" 
+                    icon={<CheckCircle className="w-8 h-8 text-indigo-500" />}
+                    message="View and manage the status of security controls (e.g., patching, authentication, network segmentation) across all OT assets. Future iteration will allow marking controls as compliant."
+                />
+            );
+
+            const RemediationTasks = () => (
+                <ViewPlaceholder 
+                    title="Remediation Task Queue" 
+                    icon={<HardHat className="w-8 h-8 text-indigo-500" />}
+                    message="Track and assign remediation tasks generated from high-risk assets and failed security controls. Focus on closing the vulnerability gaps."
+                />
+            );
+
+            const AdminView = () => {
+                if (!isAdmin) {
+                    return <ViewPlaceholder 
+                        title="Access Denied" 
+                        icon={<User className="w-8 h-8 text-red-500" />}
+                        message="You must be an administrator to access this view. Your current User ID does not match the hardcoded admin UIDs."
+                    />;
+                }
+                
+                return (
+                    <div className="space-y-6">
+                        <h2 className="text-3xl font-extrabold text-gray-900 border-b pb-3">Admin Panel</h2>
+                        <div className="bg-white p-6 rounded-xl shadow-lg border border-gray-200">
+                            <h3 className="text-xl font-semibold mb-3 text-gray-800 flex items-center"><Settings className="w-5 h-5 mr-2" /> System Information</h3>
+                            <p className="text-sm text-gray-600">
+                                This panel is reserved for privileged users (Admin/Engineer). 
+                                Functionality includes advanced system checks and configuration settings.
+                            </p>
+                            <ul className="mt-4 space-y-2 text-sm">
+                                <li className="font-mono bg-gray-50 p-2 rounded-lg break-all">App ID: <span className="font-semibold text-indigo-700">{appId}</span></li>
+                                <li className="font-mono bg-gray-50 p-2 rounded-lg break-all">Current User ID: <span className="font-semibold text-green-700">{userId}</span></li>
+                                <li className="font-mono bg-gray-50 p-2 rounded-lg break-all">Admin UIDs: <span className="text-red-700">{ADMIN_UIDS.join(', ')}</span></li>
+                            </ul>
+                        </div>
+                        <ViewPlaceholder 
+                            title="Audit Log Access" 
+                            icon={<BookOpen className="w-8 h-8 text-indigo-500" />}
+                            message="Access detailed logs and audit trails for all user and system actions (not fully implemented in this demo)."
+                        />
+                    </div>
+                );
+            };
+
+            const ViewPlaceholder = ({ title, icon, message }) => (
+                <div className="flex flex-col items-center justify-center p-12 bg-white rounded-xl shadow-lg border border-gray-200">
+                    <div className="p-4 bg-indigo-50 rounded-full mb-4">
+                        {icon}
+                    </div>
+                    <h3 className="text-xl font-bold text-gray-800 mb-2">{title}</h3>
+                    <p className="text-gray-500 text-center max-w-md">{message}</p>
+                </div>
+            );
+
+            const renderView = () => {
+                switch (currentView) {
+                    case 'riskDashboard':
+                        return <RiskDashboard />;
+                    case 'assetBuilder':
+                        return <AssetBuilder />;
+                    case 'securityControls':
+                        return <SecurityControls />;
+                    case 'remediationTasks':
+                        return <RemediationTasks />;
+                    case 'admin':
+                        return <AdminView />;
+                    default:
+                        return <RiskDashboard />;
+                }
+            };
+
+            // Loading and Error States
+            if (loading) {
+                return (
+                    <div className="flex flex-col items-center justify-center min-h-screen text-indigo-600">
+                        <svg className="animate-spin h-10 w-10 text-indigo-500" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                        </svg>
+                        <p className="mt-4 text-lg font-medium">Connecting to OT Guardian...</p>
+                        <p className="text-sm text-gray-500">Authenticating and loading configuration data.</p>
+                    </div>
+                );
+            }
+
+            if (error) {
+                return (
+                    <div className="flex flex-col items-center justify-center min-h-screen bg-red-50 p-6">
+                        <AlertTriangle className="w-12 h-12 text-red-600 mb-4" />
+                        <h1 className="text-2xl font-bold text-red-800">Application Error</h1>
+                        <p className="text-red-700 mt-2 text-center max-w-xl">{error}</p>
+                        <p className="text-sm text-red-500 mt-4">User ID: {userId || 'N/A'}</p>
+                    </div>
+                );
+            }
+
+            return (
+                <div className="min-h-screen">
+                    {modal && <Modal type={modal.type} message={modal.message} onClose={() => setModal(null)} />}
+                    <div className="max-w-7xl mx-auto py-6 sm:px-6 lg:px-8">
+                        {/* Header and User Info */}
+                        <header className="flex justify-between items-center p-4 bg-white shadow-md rounded-xl mb-4 print-hide">
+                            <h1 className="text-2xl font-bold text-indigo-700 flex items-center">
+                                <Shield className="w-6 h-6 mr-2" />
+                                OT Guardian Console
+                            </h1>
+                            <div className="flex items-center space-x-4">
+                                <div className="text-right text-sm">
+                                    <p className="font-semibold text-gray-900">User ID:</p>
+                                    <p className="font-mono text-xs text-gray-600 truncate max-w-[150px] sm:max-w-none">{userId || 'N/A'}</p>
+                                </div>
+                                {userId && (
+                                    <button 
+                                        onClick={handleSignOut} 
+                                        className="p-2 rounded-full bg-red-100 text-red-600 hover:bg-red-200 transition-colors shadow-sm flex items-center justify-center group"
+                                        aria-label="Sign Out"
+                                    >
+                                        <LogOut className='w-5 h-5 group-hover:rotate-12 transition-transform' />
+                                    </button>
+                                )}
+                            </div>
+                        </header>
+
+                        {/* Navigation Bar */}
+                        <nav className="flex space-x-1 p-3 border-b bg-white rounded-xl shadow-md overflow-x-auto whitespace-nowrap mb-6 print-hide">
+                            {[
+                                { view: 'riskDashboard', label: 'Risk Dashboard', icon: <Shield className="w-4 h-4 mr-2" /> },
+                                { view: 'assetBuilder', label: 'Asset Builder', icon: <Cpu className="w-4 h-4 mr-2" /> },
+                                { view: 'securityControls', label: 'Controls', icon: <CheckCircle className="w-4 h-4 mr-2" /> },
+                                { view: 'remediationTasks', label: 'Remediation', icon: <HardHat className="w-4 h-4 mr-2" /> },
+                                ...(isAdmin ? [{ view: 'admin', label: 'Admin', icon: <User className="w-4 h-4 mr-2" /> }] : []),
+                            ].map(item => (
+                                <button
+                                    key={item.view}
+                                    onClick={() => setCurrentView(item.view)}
+                                    className={`flex items-center px-4 py-2 text-sm font-semibold rounded-lg transition-all duration-150 ${
+                                        currentView === item.view ? 'bg-indigo-600 text-white shadow-lg' : 'text-gray-700 hover:bg-indigo-50 hover:text-indigo-700'
+                                    }`}
+                                >
+                                    {item.icon}
+                                    {item.label}
+                                </button>
+                            ))}
+                        </nav>
+
+                        {/* Deployment Status Bar */}
+                        <div className={`p-3 text-sm font-semibold rounded-xl text-center shadow-md mb-6 ${
+                            deploymentStatus?.status === 'Online' ? 'bg-green-100 text-green-800 border-2 border-green-300' : 
+                            deploymentStatus?.status === 'Warning' ? 'bg-yellow-100 text-yellow-800 border-2 border-yellow-300' : 
+                            'bg-red-100 text-red-800 border-2 border-red-300'
+                        } print-hide`}>
+                            <Zap className="w-4 h-4 inline mr-1" />
+                            Deployment Status: {deploymentStatus?.status || 'Loading...'} | 
+                            Last Check: {deploymentStatus?.lastCheck?.seconds ? new Date(deploymentStatus.lastCheck.seconds * 1000).toLocaleString() : 'N/A'}
+                        </div>
+
+                        {/* Main Content Area */}
+                        <main className="p-4 sm:p-6 bg-white rounded-xl shadow-2xl print-full">
+                            {renderView()}
+                        </main>
+                    </div>
+                </div>
+            );
+        };
+
+        // Standard React 18 rendering code
+        const container = document.getElementById('root');
+        const root = ReactDOM.createRoot(container);
+        root.render(<App />);
+    </script>
+</body>
+</html>

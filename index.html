@@ -3,12 +3,14 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>OT Guardian Security Posture Management</title>
+    <title>OT Guardian App (Vanilla JS & Firebase Fix)</title>
     <!-- Load Tailwind CSS -->
     <script src="https://cdn.tailwindcss.com"></script>
-    <!-- Lucide Icons (Vanilla JS compatible) -->
-    <script src="https://unpkg.com/lucide@latest"></script>
    
+    <!-- Load Lucide Icons (Vanilla JS Friendly SVG icons) -->
+    <script src="https://unpkg.com/lucide@latest"></script>
+
+    <!-- Print/PDF Optimization -->
     <style>
         @media print {
             .print-hide { display: none !important; }
@@ -16,937 +18,600 @@
             body, .bg-gray-100 { background-color: white !important; }
             .table-responsive td, .table-responsive th { white-space: normal !important; }
         }
-        .progress-ring__circle {
-            transition: stroke-dashoffset 0.35s;
-            transform: rotate(-90deg);
-            transform-origin: 50% 50%;
-        }
     </style>
-</head>
-<body class="bg-gray-100 min-h-screen">
-    <div id="root"></div>
 
+    <!-- Load Firebase SDKs -->
     <script type="module">
-        // --- FIREBASE IMPORTS (ES Modules) ---
-        import { initializeApp } from 'https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js';
-        import { getFirestore, doc, setDoc, updateDoc, collection, query, onSnapshot, serverTimestamp, setLogLevel } from 'https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js';
-        import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from 'https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js';
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged, signOut } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getFirestore, doc, setDoc, collection, query, onSnapshot, serverTimestamp, setLogLevel } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
 
-        // --- GLOBAL STATE & CONFIGURATION ---
-        let app, db, auth;
-        let state = {
-            userId: null,
-            isAuthReady: false,
-            firebaseError: null,
-            userRole: 'admin', // Default role
-            assets: [],
-            tasks: [],
+        // Expose Firebase services globally for Vanilla JS to use
+        window.firebase = { initializeApp, getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged, signOut, getFirestore, doc, setDoc, collection, query, onSnapshot, serverTimestamp, setLogLevel };
+    </script>
+</head>
+<body class="bg-gray-100 min-h-screen font-[Inter]">
+    <!-- This is the container where the Vanilla JS app will render -->
+    <div id="root" class="min-h-screen"></div>
+
+    <script>
+        // --- GLOBAL APP STATE ---
+        const appState = {
             currentView: 'riskDashboard',
-            isModalOpen: false,
+            isAuthenticated: false,
+            isAuthReady: false,
+            isFirebaseReady: false,
+            userId: null,
+            userRole: 'Engineer', // Default role
+            data: { assets: [], controls: [], risks: [], tasks: [] },
+            deploymentStatus: { status: 'Unknown', message: 'Initializing...', lastCheck: null },
+            error: null,
+            db: null,
+            auth: null,
+            appId: 'default-app-id',
+            // Mock data fallback for non-deployed/unconfigured environments
+            mockData: {
+                assets: [{ id: 'a1', name: 'PLC-101', location: 'Floor 1', type: 'Controller' }],
+                controls: [{ id: 'c1', name: 'Network Segmentation', status: 'Deployed' }],
+                risks: [{ id: 'r1', description: 'Unpatched firmware', assetId: 'a1', severity: 'Critical', status: 'Open' }],
+                tasks: []
+            }
         };
 
-        // Get config from global scope (provided by Canvas environment)
-        let firebaseConfig = {};
-        let appId = 'default-app-id';
-        const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
-       
-        try {
-            const fConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {};
-            const aId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
-           
-            if (fConfig && fConfig.apiKey) {
-                firebaseConfig = fConfig;
-                appId = aId;
-            } else {
-                console.error("Firebase config is missing or invalid.");
+        // --- FIREBASE CONFIGURATION SETUP (ROBUST DEPLOYMENT FIX) ---
+        let firebaseConfig = null;
+
+        function initializeConfig() {
+            try {
+                // 1. Attempt to load platform config (Gemini environment)
+                const fConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : null;
+                appState.appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
+
+                if (fConfig && fConfig.projectId) {
+                    firebaseConfig = fConfig;
+                } else {
+                    console.warn("Platform Firebase config missing. Checking manual fallback.");
+                   
+                    // 2. Fallback for external deployment (e.g., Git) - MANUAL CONFIG GOES HERE
+                    /*
+                    firebaseConfig = {
+                        apiKey: "AIzaSyAyDKqA-j9yjp4KeGPGR49Cr6_q_drxBVs",
+  authDomain: "otgaurdian.firebaseapp.com",
+  projectId: "otgaurdian",
+  storageBucket: "otgaurdian.firebasestorage.app",
+  messagingSenderId: "719542806938",
+  appId: "1:719542806938:web:ed9376fcc7d04851e47223",
+  measurementId: "G-9FMPGC5C93"
+                    };
+                    */
+
+                    if (!firebaseConfig) {
+                        const failMsg = "CRITICAL: No Firebase configuration available. Running in read-only mock mode.";
+                        console.error(failMsg);
+                        appState.error = failMsg + " (Manually add config for external deployment.)";
+                    }
+                }
+            } catch (e) {
+                console.error("Error parsing Firebase config:", e);
+                appState.error = "Error initializing configuration.";
             }
-        } catch (e) {
-            console.error("Failed to parse Firebase configuration:", e);
+        }
+       
+        // --- HELPER FUNCTIONS ---
+       
+        function createElement(tag, classes = '', content = '') {
+            const el = document.createElement(tag);
+            if (classes) el.className = classes;
+            if (typeof content === 'string') {
+                el.innerHTML = content;
+            } else if (content instanceof Node) {
+                el.appendChild(content);
+            } else if (Array.isArray(content)) {
+                content.forEach(c => el.appendChild(c));
+            }
+            return el;
         }
 
-        const PUBLIC_DATA_PATH = `/artifacts/${appId}/public/data`;
-        const CONTROL_STATUSES = ['Not Assessed', 'Implemented', 'Partially Implemented', 'Not Implemented', 'Not Applicable'];
-        const PURDUE_ZONES = ['Level 0: Process', 'Level 1: Basic Control', 'Level 2: Supervisory', 'Level 3: Operations', 'Level 4: Enterprise'];
-        const MOCK_USERS = [
-            { id: 'admin-temp-id', email: 'admin@otg.com', role: 'admin', uid: 'admin-UID-123456' },
-            { id: 'manager-temp-id', email: 'manager@otg.com', role: 'manager', uid: 'manager-UID-123456' },
-            { id: 'engineer-temp-id', email: 'engineer@otg.com', role: 'engineer', uid: 'engineer-UID-123456' },
-        ];
-       
-        // --- UTILITY FUNCTIONS ---
+        function getIcon(name, classes = 'w-5 h-5') {
+            const iconElement = document.createElement('i');
+            iconElement.className = classes;
+            iconElement.innerHTML = `<svg data-lucide="${name}" class="${classes}"></svg>`;
+            return iconElement;
+        }
 
-        const notify = (message, type = 'info') => {
-            console.log(`[${type.toUpperCase()}] ${message}`);
-            // In a real app, this would show a floating toast/modal instead of alert()
-            const messageBox = document.getElementById('message-box');
-            if (messageBox) {
-                messageBox.innerHTML = message;
-                messageBox.className = `p-3 rounded-xl mb-4 text-sm font-semibold ${
-                    type === 'error' ? 'bg-red-500 text-white' :
-                    type === 'success' ? 'bg-green-500 text-white' :
-                    'bg-blue-500 text-white'
-                }`;
-                messageBox.style.display = 'block';
-                setTimeout(() => messageBox.style.display = 'none', 3000);
-            }
-        };
-
-        const hasAccess = (requiredRoles) => requiredRoles.includes(state.userRole);
-
-        // Simple state update and re-render function
-        const updateState = (newState) => {
-            state = { ...state, ...newState };
-            renderApp();
-        };
-
-        // --- DATA FACTORIES & HELPERS ---
-
-        const createInitialIEC62443 = () => ([
-            { fr: 'FR1', name: 'Identification & Authentication Control (IAC)', targetSL: 3, controls: [
-                { cid: 'IAC1', requirement: 'Unique User IDs', status: 'Not Assessed', notes: '' },
-                { cid: 'IAC2', requirement: 'Password Complexity', status: 'Not Assessed', notes: '' },
-                { cid: 'IAC3', requirement: 'Multi-Factor Auth', status: 'Not Assessed', notes: '' },
-            ]},
-            { fr: 'FR2', name: 'Use Control (UC)', targetSL: 2, controls: [
-                { cid: 'UC1', requirement: 'Role-Based Access', status: 'Not Assessed', notes: '' },
-                { cid: 'UC2', requirement: 'Principle of Least Privilege', status: 'Not Assessed', notes: '' },
-            ]},
-            { fr: 'FR3', name: 'System Integrity (SI)', targetSL: 4, controls: [
-                { cid: 'SI1', requirement: 'Anti-Malware', status: 'Not Assessed', notes: '' },
-                { cid: 'SI2', requirement: 'Patch Management', status: 'Not Assessed', notes: '' },
-            ]},
-        ]);
-       
-        const createInitialFlatControls = (frameworkName) => {
-            const controlsMap = {
-                sans: [
-                    { id: 'sans_inventory_devices', name: 'Inventory of Authorized Devices', description: 'Maintain a detailed inventory of all assets.', status: 'Not Assessed', notes: '' },
-                    { id: 'sans_vulnerability', name: 'Vulnerability Management', description: 'Implement a continuous vulnerability discovery and remediation process.', status: 'Not Assessed', notes: '' },
-                ],
-                ciFortify: [
-                    { id: 'ci_1_inventory', name: 'Inventory and Control of Hardware Assets', description: 'Actively manage all hardware devices on the network.', status: 'Not Assessed', notes: '' },
-                    { id: 'ci_3_mfa', name: 'Multi-Factor Authentication', description: 'Implement MFA for all remote and privileged access.', status: 'Not Assessed', notes: '' },
-                ]
-            };
-            return controlsMap[frameworkName] || [];
-        };
-
-        const createNewAsset = (formData, creatorId) => ({
-            name: formData.name,
-            type: formData.type,
-            zone: formData.zone,
-            impact: formData.impact,
-            createdBy: creatorId,
-            riskScore: 50,
-            iec62443: createInitialIEC62443(),
-            sans: createInitialFlatControls('sans'),
-            ciFortify: createInitialFlatControls('ciFortify'),
-            createdAt: serverTimestamp(),
-            updatedAt: serverTimestamp(),
-        });
-
-        // --- DATA OPERATIONS ---
-
-        const addAsset = async (formData) => {
-            const newAsset = createNewAsset(formData, state.userId);
-            try {
-                const assetRef = doc(collection(db, `${PUBLIC_DATA_PATH}/assets`));
-                await setDoc(assetRef, newAsset);
-                notify("Asset added successfully!", 'success');
-            } catch (e) {
-                notify(`Error adding asset: ${e.message}`, 'error');
-            }
-        };
-       
-        const updateAssetControl = async (assetId, framework, controlPath, newStatus) => {
-            const assetRef = doc(db, `${PUBLIC_DATA_PATH}/assets`, assetId);
-            const assetToUpdate = state.assets.find(a => a.id === assetId);
-
-            if (!assetToUpdate) {
-                notify("Asset not found for update.", 'error');
-                return;
-            }
-
-            try {
-                const updatedAsset = JSON.parse(JSON.stringify(assetToUpdate)); // Deep clone
-                let updateData = {};
-
-                if (framework === 'iec62443') {
-                    const [frIndex, controlIndex] = controlPath;
-                    updatedAsset.iec62443[frIndex].controls[controlIndex].status = newStatus;
-                    updateData = { iec62443: updatedAsset.iec62443, updatedAt: serverTimestamp() };
-                } else {
-                    const controlIndex = controlPath;
-                    updatedAsset[framework][controlIndex].status = newStatus;
-                    updateData = { [framework]: updatedAsset[framework], updatedAt: serverTimestamp() };
-                }
-                await updateDoc(assetRef, updateData);
-                notify("Control status updated.", 'success');
-            } catch (e) {
-                notify(`Error updating control status: ${e.message}`, 'error');
-            }
-        };
-
-        const addTask = async (assetName, description, priority = 'Medium') => {
-            try {
-                const taskRef = collection(db, `${PUBLIC_DATA_PATH}/remediationTasks`);
-                await setDoc(doc(taskRef), {
-                    assetName,
-                    description,
-                    priority,
-                    status: 'Open',
-                    createdBy: state.userId,
-                    createdAt: serverTimestamp(),
-                });
-                notify("Remediation Task added.", 'success');
-            } catch (e) {
-                notify(`Error adding task: ${e.message}`, 'error');
-            }
-        };
-
-        const updateTaskStatus = async (taskId, newStatus) => {
-            try {
-                const taskRef = doc(db, `${PUBLIC_DATA_PATH}/remediationTasks`, taskId);
-                await updateDoc(taskRef, { status: newStatus, updatedAt: serverTimestamp() });
-                notify(`Task status updated to ${newStatus}.`, 'success');
-            } catch (e) {
-                notify(`Error updating task status: ${e.message}`, 'error');
-            }
-        };
-
-        // --- FIREBASE INITIALIZATION & DATA LISTENERS ---
-
-        const initializeFirebase = async () => {
-            if (Object.keys(firebaseConfig).length === 0) {
-                updateState({ firebaseError: "Firebase configuration is missing.", isAuthReady: true });
-                return;
-            }
-
-            try {
-                app = initializeApp(firebaseConfig);
-                db = getFirestore(app);
-                auth = getAuth(app);
-                setLogLevel('debug');
-
-                onAuthStateChanged(auth, (user) => {
-                    updateState({ userId: user ? user.uid : null });
-                });
-               
-                // Sign in logic
-                const attemptSignIn = async () => {
-                    try {
-                        if (initialAuthToken) {
-                            await signInWithCustomToken(auth, initialAuthToken);
-                        } else {
-                            await signInAnonymously(auth);
-                        }
-                    } catch (error) {
-                        notify("Sign-in failed.", 'error');
-                    } finally {
-                        // CRITICAL: Dismiss loading state
-                        updateState({ isAuthReady: true });
-                    }
-                };
-
-                if (!auth.currentUser) {
-                    await attemptSignIn();
-                } else {
-                    updateState({ isAuthReady: true });
-                }
-
-                // Data Listeners
-                onSnapshot(query(collection(db, `${PUBLIC_DATA_PATH}/assets`)), (snapshot) => {
-                    const fetchedAssets = snapshot.docs.map(doc => ({
-                        id: doc.id,
-                        ...doc.data(),
-                        iec62443: doc.data().iec62443 || createInitialIEC62443(),
-                        sans: doc.data().sans || createInitialFlatControls('sans'),
-                        ciFortify: doc.data().ciFortify || createInitialFlatControls('ciFortify'),
-                    })).filter(doc => !doc.deleted);
-                    updateState({ assets: fetchedAssets });
-                }, (error) => notify(`Error fetching assets: ${error.message}`, 'error'));
-               
-                onSnapshot(query(collection(db, `${PUBLIC_DATA_PATH}/remediationTasks`)), (snapshot) => {
-                    const fetchedTasks = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })).filter(doc => !doc.deleted);
-                    updateState({ tasks: fetchedTasks });
-                }, (error) => notify(`Error fetching tasks: ${error.message}`, 'error'));
-
-            } catch (error) {
-                updateState({ firebaseError: `Initialization failed: ${error.message}`, isAuthReady: true });
-            }
-        };
-
-        // --- DOM RENDERER FUNCTIONS ---
-
-        // Helper to convert object to HTML string
-        const createHTML = (tag, attrs = {}, children = []) => {
-            const attrStr = Object.entries(attrs).map(([key, value]) => {
-                if (key.startsWith('on') && typeof value === 'function') {
-                    // This is a simplified event handler placement (needs refinement for complex scenarios)
-                    // For simplicity in this demo, events are often attached manually after rendering.
-                    return '';
-                }
-                return `${key}="${value}"`;
-            }).join(' ');
+        function createMessageBox(type, message, onClose) {
+            if (!message) return createElement('div');
            
-            const content = Array.isArray(children) ? children.join('') : children;
-            return `<${tag} ${attrStr}>${content}</${tag}>`;
-        };
+            let colorClass, IconName;
 
-        // --- UI COMPONENTS ---
+            switch (type) {
+                case 'success':
+                    colorClass = "bg-green-100 text-green-800 border border-green-300";
+                    IconName = 'check-circle';
+                    break;
+                case 'error':
+                    colorClass = "bg-red-100 text-red-800 border border-red-300";
+                    IconName = 'alert-triangle';
+                    break;
+                default:
+                    colorClass = "bg-blue-100 text-blue-800 border border-blue-300";
+                    IconName = 'info';
+            }
 
-        const renderIcon = (name, classes = 'w-5 h-5') => `<i class="lucide ${name} ${classes}"></i>`;
+            const box = createElement('div', `p-4 rounded-xl shadow-lg flex items-center mb-4 transition-all duration-300 ${colorClass}`);
+           
+            box.appendChild(getIcon(IconName, 'w-5 h-5 mr-3 flex-shrink-0'));
+            box.appendChild(createElement('span', 'text-sm font-medium flex-grow', message));
+           
+            if (onClose) {
+                const closeBtn = createElement('button', 'ml-4 text-gray-500 hover:text-gray-700');
+                closeBtn.appendChild(getIcon('x', 'w-4 h-4'));
+                closeBtn.addEventListener('click', onClose);
+                box.appendChild(closeBtn);
+            }
+           
+            return box;
+        }
 
-        const ProgressRing = (percentage, color = '#4F46E5', radius = 60, stroke = 10) => {
-            const normalizedRadius = radius - stroke * 2;
-            const circumference = normalizedRadius * 2 * Math.PI;
-            const strokeDashoffset = circumference - (percentage / 100) * circumference;
+        // --- VIEW CREATION FUNCTIONS ---
 
-            return `
-                <svg height="${radius * 2}" width="${radius * 2}" class="mx-auto">
-                    <circle stroke="#E0E7FF" fill="transparent" stroke-width="${stroke}" r="${normalizedRadius}" cx="${radius}" cy="${radius}" />
-                    <circle stroke="${color}" fill="transparent" stroke-width="${stroke}" stroke-dasharray="${circumference} ${circumference}" style="stroke-dashoffset: ${strokeDashoffset}" r="${normalizedRadius}" cx="${radius}" cy="${radius}" class="progress-ring__circle" />
-                    <text x="50%" y="50%" text-anchor="middle" dy=".3em" font-size="1.2em" font-weight="bold" fill="${color}">
-                        ${Math.round(percentage)}%
-                    </text>
-                </svg>
-            `;
-        };
+        function createLoadingView() {
+            const container = createElement('div', 'flex justify-center items-center h-96');
+            const spinner = createElement('div', 'animate-spin rounded-full h-12 w-12 border-b-2 border-indigo-500');
+            const text = createElement('p', 'ml-4 text-lg text-gray-600', 'Loading Application Data...');
+            container.append(spinner, text);
+            return container;
+        }
 
-        const StatCard = (iconName, title, value, color) => createHTML('div', {
-            class: `p-5 rounded-xl shadow-lg flex flex-col justify-between transition-all duration-300 transform hover:scale-[1.01] bg-white border-l-4`,
-            style: `border-color: ${color}`
-        }, [
-            createHTML('div', { class: 'flex items-center space-x-4' }, [
-                createHTML('div', { class: 'p-3 rounded-full', style: `background-color: ${color}1A` }, [
-                    renderIcon(iconName, `w-6 h-6 text-[${color}]`)
-                ]),
-                createHTML('div', {}, [
-                    createHTML('p', { class: 'text-sm font-medium text-gray-500' }, title),
-                    createHTML('p', { class: 'text-3xl font-bold text-gray-900' }, value),
-                ]),
-            ]),
-        ]);
-
-        // --- VIEWS ---
-
-        const RiskDashboard = () => {
-            const totalControls = state.assets.reduce((sum, asset) =>
-                sum + (asset.iec62443?.reduce((cSum, fr) => cSum + (fr.controls?.length || 0), 0) || 0)
-            , 0);
-
-            const implementedControls = state.assets.reduce((sum, asset) =>
-                sum + (asset.iec62443?.reduce((cSum, fr) =>
-                    cSum + (fr.controls?.filter(c => c.status === 'Implemented').length || 0), 0) || 0)
-            , 0);
-
-            const overallCompliance = totalControls > 0 ? (implementedControls / totalControls) * 100 : 0;
-            const openTasks = state.tasks.filter(t => t.status !== 'Complete').length;
-            const highRiskAssets = state.assets.filter(a => a.riskScore > 60).length;
-
-            const content = [
-                createHTML('h1', { class: 'text-3xl font-extrabold text-gray-800 border-b pb-2' }, 'OT Security Risk Dashboard'),
-                createHTML('div', { class: 'grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6 mt-6' }, [
-                    StatCard('cpu', 'Total Assets', state.assets.length, '#3B82F6'),
-                    StatCard('alert-triangle', 'High Risk Assets', highRiskAssets, '#DC2626'),
-                    StatCard('hard-hat', 'Open Remediation Tasks', openTasks, '#F59E0B'),
-                    StatCard('target', 'Target SL Achieved (Mock)', Math.floor(Math.random() * 5), '#10B981'),
-                ]),
-                createHTML('div', { class: 'grid grid-cols-1 lg:grid-cols-3 gap-6 mt-6' }, [
-                    // Compliance Status Ring
-                    createHTML('div', { class: 'bg-white p-6 rounded-xl shadow-lg flex flex-col items-center justify-center' }, [
-                        createHTML('h2', { class: 'text-xl font-semibold text-indigo-700 mb-4' }, 'Overall IEC 62443 Compliance'),
-                        ProgressRing(overallCompliance),
-                        createHTML('p', { class: 'mt-4 text-center text-sm text-gray-600' }, `${implementedControls} / ${totalControls} Controls Implemented`),
-                    ]),
-                    // Risk Heatmap
-                    createHTML('div', { class: 'lg:col-span-2 bg-white p-6 rounded-xl shadow-lg' }, [
-                        createHTML('h2', { class: 'text-xl font-semibold text-indigo-700 mb-4' }, 'Risk Heatmap: Assets by Purdue Zone'),
-                        createHTML('p', { class: 'text-sm text-gray-500 mb-4' }, 'This visualization maps asset risk against the physical/logical network segmentation of the Purdue Model.'),
-                        '',
-                        createHTML('div', { class: 'grid grid-cols-2 sm:grid-cols-5 gap-4 mt-6' }, PURDUE_ZONES.map((zone, index) => {
-                            const count = state.assets.filter(a => a.zone === zone).length;
-                            const riskLevel = count > 3 ? 'bg-red-500' : count > 0 ? 'bg-yellow-500' : 'bg-green-500';
-                            return createHTML('div', { class: `${riskLevel} text-white p-3 rounded-lg text-center font-bold shadow-md` }, [
-                                createHTML('div', { class: 'text-xs font-light opacity-80' }, zone.split(': ')[0]),
-                                createHTML('div', { class: 'text-2xl' }, count),
-                            ]);
-                        })),
-                    ]),
-                ]),
+        function createRiskDashboardView(data) {
+            const container = createElement('div', 'space-y-6');
+            container.appendChild(createElement('h2', 'text-3xl font-extrabold text-gray-900 border-b pb-2', 'OT Risk Dashboard'));
+           
+            // Key Metrics Cards
+            const cardsData = [
+                { title: "Total Assets", value: data.assets.length, icon: 'cpu', color: "text-indigo-500", bg: "bg-indigo-50" },
+                { title: "Critical Risks", value: data.risks.filter(r => r.severity === 'Critical').length, icon: 'shield', color: "text-red-500", bg: "bg-red-50" },
+                { title: "Controls Deployed", value: data.controls.filter(c => c.status === 'Deployed').length, icon: 'check-circle', color: "text-green-500", bg: "bg-green-50" },
             ];
 
-            return createHTML('div', { class: 'space-y-8' }, content);
-        };
-       
-        const ManagerDashboard = () => {
-            const riskScore = (10 - (overallCompliance() / 10)).toFixed(1);
+            const cardsGrid = createElement('div', 'grid grid-cols-1 md:grid-cols-3 gap-6');
+            cardsData.forEach(card => {
+                const cardEl = createElement('div', `p-6 rounded-xl shadow-lg ${card.bg} border-l-4 border-indigo-400`);
+                const content = createElement('div', 'flex items-center');
+                content.appendChild(getIcon(card.icon, `w-8 h-8 ${card.color} mr-4`));
+                content.appendChild(createElement('div', '', [
+                    createElement('p', 'text-sm font-medium text-gray-500', card.title),
+                    createElement('p', 'text-3xl font-bold text-gray-900', card.value.toString())
+                ]));
+                cardEl.appendChild(content);
+                cardsGrid.appendChild(cardEl);
+            });
+            container.appendChild(cardsGrid);
 
-            const frCompliance = (() => {
-                const frMap = {};
-                state.assets.forEach(asset => {
-                    asset.iec62443?.forEach(fr => {
-                        if (!frMap[fr.fr]) { frMap[fr.fr] = { total: 0, implemented: 0, name: fr.name }; }
-                        frMap[fr.fr].total += fr.controls.length;
-                        frMap[fr.fr].implemented += fr.controls.filter(c => c.status === 'Implemented').length;
-                    });
-                });
-                return Object.entries(frMap).map(([fr, data]) => ({
-                    fr,
-                    name: data.name,
-                    percentage: data.total > 0 ? (data.implemented / data.total) * 100 : 0,
-                }));
-            })();
+            // Risk Breakdown Table
+            container.appendChild(createElement('h3', 'text-2xl font-semibold text-gray-800 pt-4', 'Top 5 Outstanding Risks'));
+           
+            const tableContainer = createElement('div', 'bg-white rounded-xl shadow-lg overflow-x-auto table-responsive');
+            const table = createElement('table', 'min-w-full divide-y divide-gray-200');
+            const thead = createElement('thead', 'bg-gray-50');
+            const trHead = createElement('tr');
+            ['Risk ID', 'Description', 'Asset', 'Severity', 'Status'].forEach(header => {
+                trHead.appendChild(createElement('th', 'px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider', header));
+            });
+            thead.appendChild(trHead);
+            table.appendChild(thead);
 
-            const overallCompliance = () => {
-                 const totalControls = state.assets.reduce((sum, asset) =>
-                    sum + (asset.iec62443?.reduce((cSum, fr) => cSum + (fr.controls?.length || 0), 0) || 0)
-                , 0);
+            const tbody = createElement('tbody', 'bg-white divide-y divide-gray-200');
+            data.risks.slice(0, 5).forEach(risk => {
+                const trBody = createElement('tr', 'hover:bg-gray-50 transition-colors');
+                const assetName = data.assets.find(a => a.id === risk.assetId)?.name || 'N/A';
+               
+                const severityClass = risk.severity === 'Critical' ? 'bg-red-100 text-red-800' :
+                                      risk.severity === 'High' ? 'bg-yellow-100 text-yellow-800' :
+                                      'bg-blue-100 text-blue-800';
 
-                const implementedControls = state.assets.reduce((sum, asset) =>
-                    sum + (asset.iec62443?.reduce((cSum, fr) =>
-                        cSum + (fr.controls?.filter(c => c.status === 'Implemented').length || 0), 0) || 0)
-                , 0);
-                return totalControls > 0 ? (implementedControls / totalControls) * 100 : 0;
-            };
-
-            const frBars = frCompliance.map(({ fr, name, percentage }) => {
-                const color = percentage > 75 ? '#10B981' : percentage > 40 ? '#F59E0B' : '#DC2626';
-                return createHTML('div', { key: fr }, [
-                    createHTML('div', { class: 'flex justify-between text-sm font-medium text-gray-700 mb-1' }, [
-                        createHTML('span', {}, `${fr}: ${name}`),
-                        createHTML('span', { class: 'font-bold' }, `${percentage.toFixed(0)}%`),
-                    ]),
-                    createHTML('div', { class: 'w-full bg-gray-200 rounded-full h-2.5' }, [
-                        createHTML('div', {
-                            class: 'h-2.5 rounded-full',
-                            style: `width: ${percentage}%; background-color: ${color}`
-                        }),
-                    ]),
-                ]);
+                trBody.appendChild(createElement('td', 'px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900', risk.id.substring(0, 8)));
+                trBody.appendChild(createElement('td', 'px-6 py-4 text-sm text-gray-500', risk.description));
+                trBody.appendChild(createElement('td', 'px-6 py-4 whitespace-nowrap text-sm text-gray-500', assetName));
+               
+                const severityTd = createElement('td', 'px-6 py-4 whitespace-nowrap text-sm font-semibold');
+                severityTd.appendChild(createElement('span', `px-2 inline-flex text-xs leading-5 font-semibold rounded-full ${severityClass}`, risk.severity));
+                trBody.appendChild(severityTd);
+               
+                trBody.appendChild(createElement('td', 'px-6 py-4 whitespace-nowrap text-sm text-gray-500', risk.status));
+               
+                tbody.appendChild(trBody);
             });
 
-            const content = [
-                createHTML('h1', { class: 'text-3xl font-extrabold text-gray-800 border-b pb-2' }, 'Executive Posture Overview'),
-                createHTML('div', { class: 'grid grid-cols-1 sm:grid-cols-3 gap-6 mt-6' }, [
-                    StatCard('bar-chart-2', 'Mock Risk Score', `${riskScore} / 10`, '#9333EA'),
-                    StatCard('shield', 'Overall Compliance', `${overallCompliance().toFixed(1)}%`, '#10B981'),
-                    StatCard('target', 'Target SL (Mocked)', 'SL 3 / SL 4', '#F97316'),
-                ]),
-                createHTML('div', { class: 'bg-white p-6 rounded-xl shadow-lg mt-6' }, [
-                    createHTML('h2', { class: 'text-2xl font-semibold text-indigo-700 mb-4' }, 'IEC 62443 Foundational Requirement (FR) Coverage'),
-                    createHTML('p', { class: 'text-sm text-gray-500 mb-4' }, 'Progress for key Foundational Requirements based on asset-level control implementation.'),
-                    '',
-                    createHTML('div', { class: 'space-y-4' }, frBars),
-                ]),
-            ];
-            return createHTML('div', { class: 'space-y-8' }, content);
-        };
+            table.appendChild(tbody);
+            tableContainer.appendChild(table);
+            container.appendChild(tableContainer);
 
-        const AssetBuilder = () => {
-            const AssetModal = () => {
-                const formId = 'asset-builder-form';
-                const modalHtml = createHTML('div', { id: 'asset-modal', class: 'fixed inset-0 bg-gray-900 bg-opacity-75 flex items-center justify-center z-50 p-4 print-hide' }, [
-                    createHTML('div', { class: 'bg-white rounded-xl shadow-2xl max-w-lg w-full max-h-full overflow-y-auto' }, [
-                        createHTML('div', { class: 'flex justify-between items-center p-4 border-b' }, [
-                            createHTML('h3', { class: 'text-xl font-bold text-gray-800' }, 'Add New OT Asset'),
-                            createHTML('button', { id: 'close-modal-btn', class: 'text-gray-400 hover:text-gray-600 p-1 rounded-full hover:bg-gray-100' }, renderIcon('x', 'w-6 h-6')),
-                        ]),
-                        createHTML('form', { id: formId, class: 'p-6 space-y-4' }, [
-                            createHTML('div', {}, [
-                                createHTML('label', { class: 'block text-sm font-medium text-gray-700' }, 'Name'),
-                                createHTML('input', { type: 'text', name: 'name', required: true, class: 'mt-1 block w-full px-3 py-2 border border-gray-300 rounded-lg shadow-sm' }),
-                            ]),
-                            createHTML('div', {}, [
-                                createHTML('label', { class: 'block text-sm font-medium text-gray-700' }, 'Type'),
-                                createHTML('select', { name: 'type', class: 'mt-1 block w-full px-3 py-2 border border-gray-300 rounded-lg shadow-sm' },
-                                    ['PLC', 'HMI', 'Server', 'Historian', 'Workstation'].map(t => createHTML('option', { value: t }, t))
-                                ),
-                            ]),
-                            createHTML('div', {}, [
-                                createHTML('label', { class: 'block text-sm font-medium text-gray-700' }, 'Zone'),
-                                createHTML('select', { name: 'zone', class: 'mt-1 block w-full px-3 py-2 border border-gray-300 rounded-lg shadow-sm' },
-                                    PURDUE_ZONES.map(z => createHTML('option', { value: z }, z))
-                                ),
-                            ]),
-                            createHTML('div', {}, [
-                                createHTML('label', { class: 'block text-sm font-medium text-gray-700' }, 'Impact'),
-                                createHTML('select', { name: 'impact', class: 'mt-1 block w-full px-3 py-2 border border-gray-300 rounded-lg shadow-sm' },
-                                    ['High', 'Medium', 'Low'].map(i => createHTML('option', { value: i }, i))
-                                ),
-                            ]),
-                            createHTML('div', { class: 'flex justify-end pt-4' }, [
-                                createHTML('button', { type: 'submit', class: 'flex items-center bg-indigo-600 text-white px-4 py-2 rounded-xl font-semibold hover:bg-indigo-700' }, [
-                                    renderIcon('save', 'w-5 h-5 mr-2'), ' Add Asset'
-                                ]),
-                            ]),
-                        ]),
-                    ]),
-                ]);
+            return container;
+        }
 
-                // Render Modal and attach handlers
-                const root = document.getElementById('root');
-                const modalContainer = document.createElement('div');
-                modalContainer.innerHTML = modalHtml;
-                root.appendChild(modalContainer);
-
-                const closeModal = () => {
-                    updateState({ isModalOpen: false });
-                    modalContainer.remove();
-                };
-
-                document.getElementById('close-modal-btn').onclick = closeModal;
-                document.getElementById(formId).onsubmit = async (e) => {
-                    e.preventDefault();
-                    const formData = {
-                        name: e.target.elements.name.value,
-                        type: e.target.elements.type.value,
-                        zone: e.target.elements.zone.value,
-                        impact: e.target.elements.impact.value,
-                    };
-                    await addAsset(formData);
-                    closeModal();
-                };
-            };
+        function createAdminView() {
+            const { userId, userRole, isFirebaseReady } = appState;
            
-            if (state.isModalOpen) { AssetModal(); }
+            const mockUsers = [
+                { id: 1, email: 'faysalhasan2001@yahoo.com', role: 'Engineer', lastLogin: '2025-11-28' },
+                { id: 2, email: 'auditor@otg.com', role: 'Auditor', lastLogin: '2025-11-27' },
+                { id: 3, email: 'CYBERMELB@GMAIL.COM', role: 'Admin', lastLogin: '2025-11-29' },
+            ];
 
-            const filteredAssets = state.assets.filter(a =>
-                a.name.toLowerCase().includes(state.assetFilter?.toLowerCase() || '') ||
-                a.zone.toLowerCase().includes(state.assetFilter?.toLowerCase() || '')
-            );
+            let userEmail = 'N/A (Anonymous/Uninitialized)';
+            if (isFirebaseReady && appState.auth && appState.auth.currentUser) {
+                userEmail = appState.auth.currentUser.email || appState.auth.currentUser.uid;
+            }
 
-            const tableRows = filteredAssets.map(asset => createHTML('tr', { key: asset.id, class: 'hover:bg-indigo-50 transition-colors' }, [
-                createHTML('td', { class: 'px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900' }, asset.name || 'N/A'),
-                createHTML('td', { class: 'px-6 py-4 whitespace-nowrap text-sm text-gray-500' }, asset.type || 'N/A'),
-                createHTML('td', { class: 'px-6 py-4 whitespace-nowrap text-sm text-gray-500' }, asset.zone || 'N/A'),
-                createHTML('td', { class: 'px-6 py-4 whitespace-nowrap text-sm text-gray-500' }, asset.impact || 'N/A'),
-                createHTML('td', { class: 'px-6 py-4 whitespace-nowrap text-sm font-bold text-indigo-600' }, asset.riskScore || 'N/A'),
+            const currentUserInfo = {
+                id: 99,
+                email: userEmail,
+                role: userRole || 'Loading...',
+                lastLogin: new Date().toLocaleDateString(),
+                isCurrent: true
+            };
+
+            const allUsers = [currentUserInfo, ...mockUsers.filter(u => u.email !== currentUserInfo.email)];
+
+            const container = createElement('div', 'space-y-6');
+            container.appendChild(createElement('h2', 'text-3xl font-extrabold text-gray-900 border-b pb-2 flex items-center', [
+                getIcon('users', 'w-7 h-7 mr-2 text-indigo-600'),
+                createElement('span', '', 'User & Application Management')
             ]));
-
-            const content = [
-                createHTML('div', { class: 'flex flex-col sm:flex-row justify-between items-center border-b pb-4' }, [
-                    createHTML('h1', { class: 'text-3xl font-extrabold text-gray-800 mb-3 sm:mb-0' }, `Asset Inventory (${state.assets.length})`),
-                    createHTML('div', { class: 'flex space-x-3 w-full sm:w-auto' }, [
-                        createHTML('input', { id: 'asset-filter', type: 'text', placeholder: 'Filter by Name or Zone...', value: state.assetFilter || '', class: 'px-3 py-2 border border-gray-300 rounded-xl shadow-sm w-full sm:w-64' }),
-                        createHTML('button', { id: 'add-asset-btn', class: 'flex items-center bg-indigo-600 text-white px-4 py-2 rounded-xl font-semibold shadow-md hover:bg-indigo-700 transition-colors' }, [
-                            renderIcon('plus', 'w-5 h-5 mr-2'), ' Add Asset'
-                        ]),
-                    ]),
-                ]),
-                createHTML('div', { class: 'bg-white rounded-xl shadow-lg overflow-x-auto table-responsive' }, [
-                    createHTML('table', { class: 'min-w-full divide-y divide-gray-200' }, [
-                        createHTML('thead', { class: 'bg-gray-50' }, [
-                            createHTML('tr', {}, [
-                                ['Name', 'Type', 'Purdue Zone', 'Impact', 'Risk Score'].map(h => createHTML('th', { class: 'px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider' }, h))
-                            ]),
-                        ]),
-                        createHTML('tbody', { class: 'bg-white divide-y divide-gray-200' }, tableRows),
-                    ]),
-                ]),
-            ];
-
-            const container = createHTML('div', { class: 'space-y-6' }, content);
            
-            // Post-render event listeners
-            setTimeout(() => {
-                document.getElementById('add-asset-btn').onclick = () => updateState({ isModalOpen: true });
-                document.getElementById('asset-filter').oninput = (e) => updateState({ assetFilter: e.target.value });
-            }, 0);
+            const statusBox = createElement('div', 'bg-indigo-50 border-l-4 border-indigo-400 text-indigo-700 p-4 rounded-xl shadow-md');
+            statusBox.appendChild(createElement('p', 'font-bold', 'Your Current Role Status:'));
+            statusBox.appendChild(createElement('p', 'text-sm', `User ID: ` + `<span class="font-mono bg-indigo-100 p-1 rounded text-xs">${userId}</span>`));
+            statusBox.appendChild(createElement('p', 'text-sm', `Authenticated Role (from token claims): ` + `<span class="font-bold text-lg text-indigo-900">${userRole}</span>`));
+            container.appendChild(statusBox);
 
-            return container;
-        };
-       
-        const SecurityControls = () => {
-            // Need selectedAssetId and selectedFramework state management
-            if (!state.selectedAssetId && state.assets.length > 0) {
-                updateState({ selectedAssetId: state.assets[0].id });
-            }
-            if (!state.selectedFramework) {
-                updateState({ selectedFramework: 'iec62443' });
-            }
+            container.appendChild(createElement('h3', 'text-2xl font-semibold text-gray-800 pt-4', 'Mock User Management (Demonstration)'));
 
-            const asset = state.assets.find(a => a.id === state.selectedAssetId);
+            const tableContainer = createElement('div', 'bg-white rounded-xl shadow-lg overflow-x-auto table-responsive');
+            const table = createElement('table', 'min-w-full divide-y divide-gray-200');
            
-            if (!asset) {
-                return createHTML('div', { class: 'p-6 text-gray-500 bg-white rounded-xl shadow-lg' }, 'Select an asset to begin assessment.');
-            }
+            // Table Head
+            const thead = createElement('thead', 'bg-gray-50');
+            const trHead = createElement('tr');
+            ['Email', 'Role', 'Last Login', 'Status'].forEach(header => {
+                trHead.appendChild(createElement('th', 'px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider', header));
+            });
+            thead.appendChild(trHead);
+            table.appendChild(thead);
 
-            const frameworks = {
-                iec62443: { name: 'IEC 62443', data: asset.iec62443 },
-                sans: { name: 'SANS Critical Controls', data: asset.sans },
-                ciFortify: { name: 'CIS Fortify', data: asset.ciFortify },
-            };
-            const currentFramework = frameworks[state.selectedFramework];
-
-            const renderControlStatusToggle = (control, frIndex, controlIndex, isIEC) => {
-                const isGap = control.status === 'Not Implemented' || control.status === 'Partially Implemented';
-                const hasEditAccess = hasAccess(['admin', 'engineer']);
-                const statusClasses = (status) => {
-                    if (status === 'Implemented') return 'bg-green-50 border-green-300 text-green-800';
-                    if (status === 'Not Implemented' || status === 'Partially Implemented') return 'bg-red-50 border-red-300 text-red-800';
-                    return 'bg-gray-50 border-gray-300';
-                };
-
-                const selectId = `control-status-${asset.id}-${control.cid || control.id}-${frIndex}-${controlIndex}`;
-                const taskBtnId = `task-btn-${asset.id}-${control.cid || control.id}-${frIndex}-${controlIndex}`;
+            // Table Body
+            const tbody = createElement('tbody', 'bg-white divide-y divide-gray-200');
+            allUsers.forEach(user => {
+                const trBody = createElement('tr', `${user.isCurrent ? 'bg-indigo-50 font-bold' : 'hover:bg-gray-50'} transition-colors`);
                
-                // HTML structure for the control interaction area
-                const html = createHTML('div', { class: 'flex items-center space-x-3' }, [
-                    createHTML('select', {
-                        id: selectId,
-                        class: `px-3 py-1 text-sm rounded-lg border focus:ring-indigo-500 focus:border-indigo-500 ${statusClasses(control.status)}`,
-                        disabled: !hasEditAccess,
-                    }, CONTROL_STATUSES.map(s => createHTML('option', { value: s, selected: s === control.status }, s))),
-                    isGap && hasEditAccess ? createHTML('button', { id: taskBtnId, class: 'flex items-center text-xs bg-red-600 text-white px-2 py-1 rounded-full hover:bg-red-700 transition-colors' }, [
-                        renderIcon('plus', 'w-3 h-3 mr-1'), ' Task'
-                    ]) : ''
-                ]);
+                const roleClass = user.role === 'Admin' ? 'bg-red-100 text-red-800' :
+                                  user.role === 'Engineer' ? 'bg-green-100 text-green-800' :
+                                  'bg-blue-100 text-blue-800';
 
-                // Post-render event attachment (must be done after element is added to DOM)
-                setTimeout(() => {
-                    const selectElement = document.getElementById(selectId);
-                    if (selectElement) {
-                        selectElement.onchange = (e) => {
-                            let controlPath = isIEC ? [frIndex, controlIndex] : controlIndex;
-                            updateAssetControl(asset.id, state.selectedFramework, controlPath, e.target.value);
-                        };
-                    }
-
-                    const taskButton = document.getElementById(taskBtnId);
-                    if (taskButton) {
-                        taskButton.onclick = () => {
-                            const taskDescription = isIEC
-                                ? `Remediate gap in ${asset.name} (IEC ${control.cid}: ${control.requirement})`
-                                : `Remediate gap in ${asset.name} (${control.id}: ${control.name})`;
-                            addTask(asset.name, taskDescription, 'High');
-                        };
-                    }
-                }, 0);
+                trBody.appendChild(createElement('td', 'px-6 py-4 whitespace-nowrap text-sm text-gray-900', user.email));
                
-                return html;
-            };
-
-            const IECControlsDisplay = () => {
-                return currentFramework.data.map((fr, frIndex) => createHTML('div', { key: fr.fr, class: 'bg-white p-5 rounded-xl shadow-lg border-l-4 border-indigo-500' }, [
-                    createHTML('h3', { class: 'text-xl font-bold text-indigo-700 mb-3' }, `${fr.fr}: ${fr.name} (Target SL: ${fr.targetSL})`),
-                    createHTML('div', { class: 'divide-y divide-gray-100' },
-                        fr.controls.map((control, controlIndex) => createHTML('div', { key: control.cid, class: 'flex justify-between items-center py-3' }, [
-                            createHTML('div', { class: 'w-3/5' }, [
-                                createHTML('p', { class: 'font-semibold text-gray-800' }, control.cid),
-                                createHTML('p', { class: 'text-sm text-gray-600' }, control.requirement),
-                            ]),
-                            createHTML('div', { class: 'w-2/5 flex justify-end' }, renderControlStatusToggle(control, frIndex, controlIndex, true)),
-                        ]))
-                    ),
-                ]));
-            };
-
-            const FlatControlsDisplay = () => {
-                const tableRows = currentFramework.data.map((control, controlIndex) => createHTML('tr', { key: control.id, class: 'hover:bg-gray-50' }, [
-                    createHTML('td', { class: 'px-6 py-4 text-sm font-medium text-gray-900' }, control.id),
-                    createHTML('td', { class: 'px-6 py-4 text-sm text-gray-500' }, control.description),
-                    createHTML('td', { class: 'px-6 py-4 text-right' }, renderControlStatusToggle(control, null, controlIndex, false)),
-                ]));
-
-                return createHTML('div', { class: 'bg-white rounded-xl shadow-lg overflow-x-auto' }, [
-                    createHTML('table', { class: 'min-w-full divide-y divide-gray-200' }, [
-                        createHTML('thead', { class: 'bg-gray-50' }, [
-                            createHTML('tr', {}, [
-                                ['Control', 'Description', 'Status'].map(h => createHTML('th', { class: 'px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase' }, h))
-                            ]),
-                        ]),
-                        createHTML('tbody', { class: 'bg-white divide-y divide-gray-200' }, tableRows),
-                    ]),
-                ]);
-            };
-
-            const content = [
-                createHTML('h1', { class: 'text-3xl font-extrabold text-gray-800 border-b pb-2' }, 'Security Control Assessment'),
-                createHTML('div', { class: 'grid grid-cols-1 sm:grid-cols-3 gap-4 bg-white p-4 rounded-xl shadow-md print-hide' }, [
-                    createHTML('div', {}, [
-                        createHTML('label', { class: 'block text-sm font-medium text-gray-700' }, 'Select Asset'),
-                        createHTML('select', { id: 'asset-select', class: 'mt-1 block w-full px-3 py-2 border rounded-lg shadow-sm' },
-                            state.assets.map(a => createHTML('option', { value: a.id, selected: a.id === state.selectedAssetId }, `${a.name} (${a.zone.split(': ')[0]})`))
-                        ),
-                    ]),
-                    createHTML('div', {}, [
-                        createHTML('label', { class: 'block text-sm font-medium text-gray-700' }, 'Select Framework'),
-                        createHTML('select', { id: 'framework-select', class: 'mt-1 block w-full px-3 py-2 border rounded-lg shadow-sm' },
-                            Object.keys(frameworks).map(key => createHTML('option', { value: key, selected: key === state.selectedFramework }, frameworks[key].name))
-                        ),
-                    ]),
-                ]),
-                asset ? createHTML('div', { class: 'mt-6' }, [
-                    createHTML('h2', { class: 'text-2xl font-bold text-gray-800 mb-4' }, `${currentFramework.name} Controls for: ${asset.name}`),
-                    state.selectedFramework === 'iec62443' ? createHTML('div', { class: 'space-y-6' }, IECControlsDisplay()) : FlatControlsDisplay(),
-                ]) : '',
-            ];
-
-            const container = createHTML('div', { class: 'space-y-6' }, content);
-
-            // Post-render event listeners
-            setTimeout(() => {
-                const assetSelect = document.getElementById('asset-select');
-                if (assetSelect) { assetSelect.onchange = (e) => updateState({ selectedAssetId: e.target.value }); }
-
-                const frameworkSelect = document.getElementById('framework-select');
-                if (frameworkSelect) { frameworkSelect.onchange = (e) => updateState({ selectedFramework: e.target.value }); }
-            }, 0);
-
-            return container;
-        };
-       
-        const RemediationTasks = () => {
-            const hasEditAccess = hasAccess(['admin', 'engineer']);
-           
-            const getPriorityClass = (priority) => {
-                switch (priority) {
-                    case 'Critical': return 'bg-red-500';
-                    case 'High': return 'bg-orange-500';
-                    case 'Medium': return 'bg-yellow-500';
-                    case 'Low': return 'bg-green-500';
-                    default: return 'bg-gray-400';
-                }
-            };
-           
-            const getStatusClass = (status) => {
-                switch (status) {
-                    case 'Open': return 'bg-red-100 text-red-800';
-                    case 'In Progress': return 'bg-yellow-100 text-yellow-800';
-                    case 'Complete': return 'bg-green-100 text-green-800';
-                    default: return 'bg-gray-100 text-gray-800';
-                }
-            };
-           
-            const tableRows = state.tasks.map(task => {
-                const selectId = `task-status-${task.id}`;
+                const roleTd = createElement('td', 'px-6 py-4 whitespace-nowrap text-sm font-semibold');
+                roleTd.appendChild(createElement('span', `px-2 inline-flex text-xs leading-5 font-semibold rounded-full ${roleClass}`, user.role));
+                trBody.appendChild(roleTd);
                
-                const html = createHTML('tr', { key: task.id, class: 'hover:bg-indigo-50 transition-colors' }, [
-                    createHTML('td', { class: 'px-6 py-4 whitespace-nowrap' },
-                        createHTML('span', { class: `px-2 py-0.5 text-xs font-semibold rounded-full text-white ${getPriorityClass(task.priority)}` }, task.priority || 'N/A')
-                    ),
-                    createHTML('td', { class: 'px-6 py-4 text-sm text-gray-900' }, task.description || 'N/A'),
-                    createHTML('td', { class: 'px-6 py-4 text-sm text-indigo-600 font-medium' }, task.assetName || 'N/A'),
-                    createHTML('td', { class: 'px-6 py-4 whitespace-nowrap' },
-                        hasEditAccess ? createHTML('select', { id: selectId, class: `px-3 py-1 text-sm rounded-lg border focus:ring-indigo-500 focus:border-indigo-500 ${getStatusClass(task.status)}` },
-                            ['Open', 'In Progress', 'Complete'].map(s => createHTML('option', { value: s, selected: s === task.status }, s))
-                        ) : createHTML('span', { class: `px-3 py-1 inline-flex text-xs leading-5 font-semibold rounded-full ${getStatusClass(task.status)}` }, task.status)
-                    ),
-                    createHTML('td', { class: 'px-6 py-4 text-sm text-gray-500' }, MOCK_USERS.find(u => u.uid === task.createdBy)?.role || 'N/A'),
-                ]);
-
-                if (hasEditAccess) {
-                    setTimeout(() => {
-                        const selectElement = document.getElementById(selectId);
-                        if (selectElement) { selectElement.onchange = (e) => updateTaskStatus(task.id, e.target.value); }
-                    }, 0);
-                }
-                return html;
+                trBody.appendChild(createElement('td', 'px-6 py-4 whitespace-nowrap text-sm text-gray-500', user.lastLogin));
+               
+                const statusTd = createElement('td', 'px-6 py-4 whitespace-nowrap text-sm text-gray-500');
+                statusTd.innerHTML = user.isCurrent ? '<span class="text-indigo-600 font-bold">Current User</span>' : 'Active';
+                trBody.appendChild(statusTd);
+               
+                tbody.appendChild(trBody);
             });
 
-            const content = [
-                createHTML('h1', { class: 'text-3xl font-extrabold text-gray-800 border-b pb-2' }, 'Remediation Task Management'),
-                createHTML('div', { class: 'bg-white rounded-xl shadow-lg overflow-x-auto table-responsive mt-6' }, [
-                    createHTML('table', { class: 'min-w-full divide-y divide-gray-200' }, [
-                        createHTML('thead', { class: 'bg-gray-50' }, [
-                            createHTML('tr', {}, [
-                                ['Priority', 'Description', 'Asset Name', 'Status', 'Created By'].map(h => createHTML('th', { class: 'px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider' }, h))
-                            ]),
-                        ]),
-                        createHTML('tbody', { class: 'bg-white divide-y divide-gray-200' }, tableRows),
-                    ]),
-                ]),
+            table.appendChild(tbody);
+            tableContainer.appendChild(table);
+            container.appendChild(tableContainer);
+
+            return container;
+        }
+
+        // Placeholder Views
+        function createPlaceholderView(title, roleRequired) {
+            const container = createElement('div', 'p-6 bg-white rounded-xl shadow-lg');
+            container.appendChild(createElement('h2', 'text-2xl font-bold', title));
+            container.appendChild(createElement('p', 'text-gray-600 mt-2', `Manage this feature here. (Requires: ${roleRequired})`));
+            return container;
+        }
+
+
+        // --- MAIN RENDER LOOP ---
+
+        function render() {
+            const root = document.getElementById('root');
+            root.innerHTML = ''; // Clear existing content
+
+            const container = createElement('div', 'min-h-screen bg-gray-100 print-full');
+            const maxWDiv = createElement('div', 'max-w-7xl mx-auto');
+            container.appendChild(maxWDiv);
+
+            // --- 1. Message Box Area ---
+            const msgArea = createElement('div', 'p-4 pt-8 print-hide');
+           
+            const message = appState.error || (appState.isFirebaseReady && appState.isAuthenticated ? `Welcome, User ID: ${appState.userId}. Current Role: ${appState.userRole}` : "Connecting/Initializing...");
+            const type = appState.error ? 'error' : 'info';
+           
+            msgArea.appendChild(createMessageBox(type, message, () => {
+                appState.error = null;
+                render();
+            }));
+            maxWDiv.appendChild(msgArea);
+
+            // --- 2. Header ---
+            const header = createElement('header', 'flex justify-between items-center p-4 bg-white shadow-md rounded-b-xl print-hide');
+           
+            const logo = createElement('div', 'flex items-center');
+            logo.appendChild(getIcon('shield', 'w-8 h-8 text-indigo-600 mr-3'));
+            logo.appendChild(createElement('h1', 'text-2xl font-bold text-gray-900', 'OT Guardian <span class="text-indigo-600">Demo</span>'));
+            header.appendChild(logo);
+
+            const userControls = createElement('div', 'flex items-center space-x-4');
+            userControls.appendChild(createElement('span', 'text-sm font-medium text-gray-600 hidden sm:block',
+                `Role: <span class="font-semibold ${appState.userRole === 'Admin' ? 'text-red-600' : 'text-indigo-600'}">${appState.userRole}</span>`
+            ));
+           
+            if (appState.isAuthenticated) {
+                const signOutBtn = createElement('button', 'flex items-center p-2 rounded-full bg-red-500 text-white hover:bg-red-600 transition-all shadow-md', getIcon('log-out', 'w-5 h-5'));
+                signOutBtn.title = "Sign Out";
+                signOutBtn.addEventListener('click', handleSignOut);
+                userControls.appendChild(signOutBtn);
+            }
+            header.appendChild(userControls);
+            maxWDiv.appendChild(header);
+
+            // --- 3. Navigation Bar ---
+            const nav = createElement('nav', 'flex space-x-1 p-3 border-b bg-white shadow-inner rounded-xl mt-4 mx-4 overflow-x-auto whitespace-nowrap print-hide');
+           
+            const navItems = [
+                { view: 'riskDashboard', label: 'Dashboard', icon: 'bar-chart-2', roles: ['Engineer', 'Auditor', 'Admin'] },
+                { view: 'assetBuilder', label: 'Assets', icon: 'cpu', roles: ['Engineer', 'Admin'] },
+                { view: 'securityControls', label: 'Controls', icon: 'check-circle', roles: ['Engineer', 'Auditor', 'Admin'] },
+                { view: 'remediationTasks', label: 'Remediation', icon: 'hard-hat', roles: ['Engineer', 'Admin'] },
+                { view: 'admin', label: 'Admin', icon: 'users', roles: ['Admin'] },
             ];
 
-            return createHTML('div', { class: 'space-y-6' }, content);
-        };
+            navItems.forEach(item => {
+                if (!item.roles.includes(appState.userRole)) return; // Role-based visibility check
 
-        const Reports = () => createHTML('div', { class: 'space-y-6 bg-white p-6 rounded-xl shadow-lg' }, [
-            createHTML('h1', { class: 'text-3xl font-extrabold text-gray-800 border-b pb-2' }, 'Reporting & Export'),
-            createHTML('p', { class: 'text-gray-600' }, 'Generate comprehensive reports on compliance, risk scores, and remediation status. Use the browser\'s print/PDF feature on the main dashboards for a detailed view.'),
-            createHTML('div', { class: 'p-4 border border-indigo-200 rounded-xl space-y-4' }, [
-                createHTML('div', { class: 'grid grid-cols-1 sm:grid-cols-3 gap-4' }, [
-                    ['Report Type', 'Executive Summary'],
-                    ['Filter by Zone', 'All Zones'],
-                    ['Date Range', 'Q4 2025']
-                ].map(([label, mockValue]) => createHTML('div', {}, [
-                    createHTML('label', { class: 'block text-sm font-medium text-gray-700' }, label),
-                    createHTML('input', { type: 'text', disabled: true, value: mockValue, placeholder: mockValue, class: 'mt-1 block w-full px-3 py-2 border rounded-lg shadow-sm bg-gray-50' })
-                ]))),
-                createHTML('button', { disabled: true, class: 'flex items-center bg-gray-400 text-white px-4 py-2 rounded-xl font-semibold cursor-not-allowed' }, [
-                    renderIcon('download', 'w-5 h-5 mr-2'), ' Generate & Export Report (Disabled)'
-                ]),
-            ]),
-        ]);
-
-        const SettingsPage = () => createHTML('div', { class: 'space-y-6 bg-white p-6 rounded-xl shadow-lg' }, [
-            createHTML('h1', { class: 'text-3xl font-extrabold text-gray-800 border-b pb-2' }, 'Assessment Settings'),
-            createHTML('p', { class: 'text-gray-600' }, 'Define global targets and assessment parameters here. (Admin access only)'),
-            createHTML('div', { class: 'grid grid-cols-1 sm:grid-cols-2 gap-4' }, [
-                createHTML('div', { class: 'p-4 border rounded-xl' }, [
-                    createHTML('h3', { class: 'font-bold text-indigo-700 mb-2' }, 'Target Security Level (SL)'),
-                    createHTML('p', { class: 'text-sm text-gray-500 mb-2' }, 'The security level to be achieved across the OT network.'),
-                    createHTML('select', { disabled: true, class: 'mt-1 block w-full px-3 py-2 border rounded-lg shadow-sm bg-gray-50' }, [
-                        ['SL 1', 'SL 2', 'SL 3 (Recommended)', 'SL 4'].map(o => createHTML('option', {}, o))
-                    ]),
-                ]),
-                createHTML('div', { class: 'p-4 border rounded-xl' }, [
-                    createHTML('h3', { class: 'font-bold text-indigo-700 mb-2' }, 'Assessment Cadence'),
-                    createHTML('p', { class: 'text-sm text-gray-500 mb-2' }, 'How often should full compliance checks be performed?'),
-                    createHTML('select', { disabled: true, class: 'mt-1 block w-full px-3 py-2 border rounded-lg shadow-sm bg-gray-50' }, [
-                        ['Quarterly', 'Semi-Annually', 'Annually'].map(o => createHTML('option', {}, o))
-                    ]),
-                ]),
-            ]),
-        ]);
-
-        const AdminDashboard = () => createHTML('div', { class: 'space-y-6 bg-white p-6 rounded-xl shadow-lg' }, [
-            createHTML('h1', { class: 'text-3xl font-extrabold text-gray-800 border-b pb-2' }, 'Admin Dashboard & System Info'),
-            createHTML('div', { class: 'grid grid-cols-1 md:grid-cols-2 gap-4 mt-4' }, [
-                createHTML('div', { class: 'bg-gray-50 p-4 rounded-lg border' }, [
-                    createHTML('h3', { class: 'font-bold text-lg text-red-700 flex items-center' }, [renderIcon('layers', 'w-5 h-5 mr-2'), ' Application ID (Mandatory Path)']),
-                    createHTML('p', { class: 'text-sm text-gray-600 mt-1' }, `This ID is used in the Firestore public path: ${createHTML('code', { class: 'font-mono text-xs text-indigo-600 break-all' }, `/artifacts/<strong>${appId}</strong>/public/data/...`)}`),
-                    createHTML('code', { class: 'block mt-2 p-2 bg-white rounded font-mono text-sm break-all' }, appId),
-                ]),
-                createHTML('div', { class: 'bg-gray-50 p-4 rounded-lg border' }, [
-                    createHTML('h3', { class: 'font-bold text-lg text-indigo-700 flex items-center' }, [renderIcon('key', 'w-5 h-5 mr-2'), ' Current Session User ID']),
-                    createHTML('p', { class: 'text-sm text-gray-600 mt-1' }, 'The unique UID assigned to this session by Firebase Authentication.'),
-                    createHTML('code', { class: 'block mt-2 p-2 bg-white rounded font-mono text-sm break-all' }, state.userId || 'N/A'),
-                ]),
-            ]),
-            createHTML('h2', { class: 'text-2xl font-semibold text-gray-800 pt-4' }, 'Mock User Management'),
-            createHTML('div', { class: 'bg-gray-50 rounded-xl overflow-x-auto' }, [
-                createHTML('table', { class: 'min-w-full divide-y divide-gray-200' }, [
-                    createHTML('thead', { class: 'bg-gray-100' }, [
-                        createHTML('tr', {}, [['Role', 'Email (Mock)', 'Full Firestore UID'].map(h => createHTML('th', { class: 'px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase' }, h))]),
-                    ]),
-                    createHTML('tbody', { class: 'bg-white divide-y divide-gray-200' }, MOCK_USERS.map(user => createHTML('tr', { key: user.uid, class: 'hover:bg-gray-50' }, [
-                        createHTML('td', { class: 'px-6 py-4 whitespace-nowrap' }, createHTML('span', { class: `px-2 py-0.5 text-xs font-semibold rounded-full ${user.role === 'admin' ? 'bg-indigo-100 text-indigo-800' : 'bg-gray-100 text-gray-800'}` }, user.role)),
-                        createHTML('td', { class: 'px-6 py-4 text-sm text-gray-900' }, user.email),
-                        createHTML('td', { class: 'px-6 py-4 text-sm font-mono text-gray-600 break-all' }, user.uid),
-                    ]))),
-                ]),
-            ]),
-        ]);
-
-        const UserGuide = () => createHTML('div', { class: 'space-y-6 bg-white p-6 rounded-xl shadow-lg' }, [
-            createHTML('h1', { class: 'text-3xl font-extrabold text-gray-800 border-b pb-2' }, 'OT Guardian User Guide / Help'),
-            createHTML('div', { class: 'space-y-4 text-gray-700' }, [
-                createHTML('p', {}, 'Welcome to the OT Guardian Security Posture Management simulator. Use the <strong>Role Selector</strong> in the header to switch roles and test access control.'),
-                createHTML('h2', { class: 'text-xl font-semibold text-indigo-700 pt-2 flex items-center' }, [renderIcon('cpu', 'w-5 h-5 mr-2'), ' Asset Builder']),
-                createHTML('p', {}, 'Use this view to add new assets (PLCs, HMIs, etc.). When an asset is created, its compliance structures (IEC 62443, SANS) are automatically initialized with all controls set to <strong>\'Not Assessed\'</strong>.'),
-                createHTML('h2', { class: 'text-xl font-semibold text-indigo-700 pt-2 flex items-center' }, [renderIcon('check-circle', 'w-5 h-5 mr-2'), ' Security Controls']),
-                createHTML('p', {}, 'This is where engineers assess controls. Select an <strong>Asset</strong> and a <strong>Framework</strong> to see the control list. Use the status dropdown to mark compliance. If status is \'Not Implemented\' or \'Partially Implemented\', a <strong>Create Task</strong> button appears to log a remediation gap.'),
-                createHTML('h2', { class: 'text-xl font-semibold text-indigo-700 pt-2 flex items-center' }, [renderIcon('shield', 'w-5 h-5 mr-2'), ' Risk Dashboards']),
-                createHTML('p', {}, 'The dashboards provide a rollup of compliance data. The <strong>Risk Dashboard</strong> focuses on operational metrics and high-risk assets, while the <strong>Manager Dashboard</strong> provides an executive view of Foundational Requirement coverage.'),
-            ]),
-        ]);
-
-
-        // --- MAIN RENDER LOGIC ---
-
-        const renderApp = () => {
-            const root = document.getElementById('root');
-            let contentHtml = '';
-
-            const navItems = [
-                { view: 'riskDashboard', label: 'Risk Dashboard', icon: 'shield', roles: ['admin', 'manager', 'engineer'] },
-                { view: 'managerDashboard', label: 'Manager Dashboard', icon: 'bar-chart-2', roles: ['admin', 'manager'] },
-                { view: 'assetBuilder', label: 'Asset Builder', icon: 'cpu', roles: ['admin', 'engineer'] },
-                { view: 'securityControls', label: 'Controls', icon: 'check-circle', roles: ['admin', 'engineer'] },
-                { view: 'remediationTasks', label: 'Remediation Tasks', icon: 'hard-hat', roles: ['admin', 'manager', 'engineer'] },
-                { view: 'reports', label: 'Reports', icon: 'file-text', roles: ['admin', 'manager'] },
-                { view: 'userGuide', label: 'User Guide', icon: 'book-open', roles: ['admin', 'manager', 'engineer'] },
-                { view: 'settings', label: 'Settings', icon: 'settings', roles: ['admin'] },
-                { view: 'adminDashboard', label: 'Admin', icon: 'user', roles: ['admin'] },
-            ].filter(item => hasAccess(item.roles));
-
-            // Loading/Error States
-            if (state.firebaseError) {
-                contentHtml = createHTML('div', { class: 'flex flex-col items-center justify-center p-20 bg-red-50 rounded-xl shadow-lg border-2 border-red-300 mt-10' }, [
-                    renderIcon('alert-triangle', 'w-12 h-12 text-red-500 mb-4'),
-                    createHTML('h2', { class: 'text-2xl font-bold text-red-800 mb-2' }, 'Critical Error'),
-                    createHTML('p', { class: 'text-gray-700 text-center max-w-md' }, state.firebaseError),
-                ]);
-            } else if (!state.isAuthReady) {
-                contentHtml = createHTML('div', { class: 'flex flex-col items-center justify-center p-20 bg-white rounded-xl shadow-lg mt-10' }, [
-                    createHTML('div', { class: 'animate-spin rounded-full h-12 w-12 border-b-4 border-indigo-600 mb-4' }),
-                    createHTML('span', { class: 'text-xl font-medium text-indigo-700' }, 'Initializing Firebase connection...'),
-                ]);
-            } else {
-                // Main Application Layout
-                let mainContent = '';
-                switch (state.currentView) {
-                    case 'riskDashboard': mainContent = RiskDashboard(); break;
-                    case 'managerDashboard': mainContent = ManagerDashboard(); break;
-                    case 'assetBuilder': mainContent = AssetBuilder(); break;
-                    case 'securityControls': mainContent = SecurityControls(); break;
-                    case 'remediationTasks': mainContent = RemediationTasks(); break;
-                    case 'reports': mainContent = Reports(); break;
-                    case 'settings': mainContent = SettingsPage(); break;
-                    case 'adminDashboard': mainContent = AdminDashboard(); break;
-                    case 'userGuide': mainContent = UserGuide(); break;
-                    default: mainContent = RiskDashboard();
-                }
-
-                const navBar = createHTML('nav', { id: 'main-nav', class: 'flex space-x-1 p-3 rounded-xl bg-white shadow-lg print-hide overflow-x-auto whitespace-nowrap mb-6' },
-                    navItems.map(item => createHTML('button', {
-                        'data-view': item.view,
-                        class: `nav-btn flex items-center px-3 py-2 text-sm font-semibold rounded-lg transition-all duration-150 ${
-                            state.currentView === item.view ? 'bg-indigo-700 text-white shadow-md' : 'text-gray-700 hover:bg-indigo-100'
-                        }`
-                    }, [
-                        renderIcon(item.icon, 'w-4 h-4 mr-2'), item.label
-                    ]))
-                );
-
-                contentHtml = [
-                    createHTML('header', { class: 'bg-indigo-800 text-white shadow-xl print-hide' }, [
-                        createHTML('div', { class: 'container mx-auto px-4 py-3 flex justify-between items-center' }, [
-                            createHTML('h1', { class: 'text-2xl font-bold flex items-center' }, [
-                                renderIcon('shield', 'w-6 h-6 mr-2'), 'OT Guardian Security Posture Management'
-                            ]),
-                            createHTML('div', { class: 'flex items-center space-x-4' }, [
-                                // Role Selector
-                                createHTML('div', { class: 'text-sm flex items-center bg-indigo-700 p-2 rounded-lg' }, [
-                                    createHTML('span', { class: 'mr-2' }, 'View as:'),
-                                    createHTML('select', { id: 'role-selector', class: 'bg-indigo-600 text-white rounded-md p-1 font-semibold focus:ring-2 focus:ring-white' },
-                                        ['admin', 'manager', 'engineer'].map(role => createHTML('option', { value: role, selected: role === state.userRole }, role))
-                                    ),
-                                ]),
-                                createHTML('span', { class: 'text-sm font-medium hidden sm:inline' }, `Current User: ${createHTML('code', { class: 'bg-indigo-700 px-2 py-1 rounded-md text-xs break-all' }, state.userId || 'N/A')}`),
-                                createHTML('button', { title: 'Sign Out (Placeholder)', class: 'p-2 rounded-full bg-indigo-700 hover:bg-indigo-600 transition-colors shadow-lg' }, renderIcon('log-out', 'w-5 h-5'))
-                            ]),
-                        ]),
-                    ]),
-                    createHTML('div', { class: 'flex-grow container mx-auto px-4 py-4 print-full' }, [
-                        createHTML('div', { id: 'message-box', style: 'display: none;' }),
-                        navBar,
-                        createHTML('main', { class: 'p-1 sm:p-4' }, mainContent)
-                    ])
-                ].join('');
-            }
-           
-            root.innerHTML = contentHtml;
-
-            // Post-render event listeners for navigation and role switching
-            if (state.isAuthReady && !state.firebaseError) {
-                // Navigation
-                document.querySelectorAll('.nav-btn').forEach(button => {
-                    button.onclick = (e) => updateState({ currentView: e.currentTarget.getAttribute('data-view') });
+                const btn = createElement('button', `flex items-center px-3 py-2 text-sm font-semibold rounded-lg transition-all duration-150`);
+                btn.classList.add(appState.currentView === item.view ? 'bg-indigo-700', 'text-white', 'shadow-md' : 'text-gray-700', 'hover:bg-indigo-100');
+               
+                const icon = getIcon(item.icon, 'w-4 h-4 mr-2');
+                const label = document.createTextNode(item.label);
+               
+                btn.append(icon, label);
+                btn.addEventListener('click', () => {
+                    appState.currentView = item.view;
+                    render();
                 });
-                // Role Selector
-                document.getElementById('role-selector').onchange = (e) => updateState({ userRole: e.target.value, currentView: 'riskDashboard' });
+                nav.appendChild(btn);
+            });
+            maxWDiv.appendChild(nav);
+
+            // --- 4. Deployment Status Bar ---
+            const statusClass = appState.deploymentStatus.status === 'Online' ? 'bg-green-100 text-green-800' :
+                                appState.deploymentStatus.status === 'Warning' ? 'bg-yellow-100 text-yellow-800' :
+                                'bg-red-100 text-red-800';
+           
+            const lastCheckTime = appState.deploymentStatus.lastCheck?.seconds ?
+                new Date(appState.deploymentStatus.lastCheck.seconds * 1000).toLocaleString() : 'N/A';
+
+            const statusBar = createElement('div', `p-3 text-sm font-semibold rounded-xl text-center shadow-md mt-4 mx-4 ${statusClass} print-hide`);
+            statusBar.innerHTML = `${getIcon('zap', 'w-4 h-4 inline mr-1').outerHTML} Deployment Status: ${appState.deploymentStatus.status} | Last Check: ${lastCheckTime}`;
+            maxWDiv.appendChild(statusBar);
+
+
+            // --- 5. Main Content Area ---
+            const main = createElement('main', 'p-4 sm:p-6');
+            const contentBox = createElement('div', 'bg-white p-6 rounded-xl shadow-2xl');
+            main.appendChild(contentBox);
+
+            let contentElement;
+
+            if (!appState.isAuthReady) {
+                contentElement = createLoadingView();
+            } else if (!appState.isFirebaseReady) {
+                // Mock Mode View
+                const mockModeContainer = createElement('div', 'text-center');
+                mockModeContainer.appendChild(createElement('h2', 'text-3xl font-bold text-red-600 mb-4', 'MOCK DATA MODE'));
+                mockModeContainer.appendChild(createElement('p', 'text-xl text-gray-700 mb-8', 'Data persistence is disabled. Fix the configuration to enable live data.'));
+                mockModeContainer.appendChild(createRiskDashboardView(appState.mockData));
+                contentElement = mockModeContainer;
+            } else {
+                // Live View (Role and View based)
+                const currentData = appState.data.assets.length > 0 ? appState.data : appState.mockData; // Use live data if available, otherwise mock
+
+                switch (appState.currentView) {
+                    case 'riskDashboard':
+                        contentElement = createRiskDashboardView(currentData);
+                        break;
+                    case 'assetBuilder':
+                        if (appState.userRole === 'Engineer' || appState.userRole === 'Admin') {
+                            contentElement = createPlaceholderView('Asset Builder', 'Engineer/Admin');
+                        } else {
+                            contentElement = createElement('div', 'p-6 text-red-500 font-bold', 'Access Denied: Requires Engineer or Admin role.');
+                        }
+                        break;
+                    case 'securityControls':
+                        if (appState.userRole === 'Engineer' || appState.userRole === 'Auditor' || appState.userRole === 'Admin') {
+                            contentElement = createPlaceholderView('Security Controls', 'Engineer/Auditor/Admin');
+                        } else {
+                            contentElement = createElement('div', 'p-6 text-red-500 font-bold', 'Access Denied: Requires Engineer, Auditor, or Admin role.');
+                        }
+                        break;
+                    case 'remediationTasks':
+                        if (appState.userRole === 'Engineer' || appState.userRole === 'Admin') {
+                            contentElement = createPlaceholderView('Remediation Tasks', 'Engineer/Admin');
+                        } else {
+                            contentElement = createElement('div', 'p-6 text-red-500 font-bold', 'Access Denied: Requires Engineer or Admin role.');
+                        }
+                        break;
+                    case 'admin':
+                        if (appState.userRole === 'Admin') {
+                            contentElement = createAdminView();
+                        } else {
+                            contentElement = createElement('div', 'p-6 text-red-500 font-bold', 'Access Denied: Requires Admin role.');
+                        }
+                        break;
+                    default:
+                        contentElement = createRiskDashboardView(currentData);
+                }
             }
            
-            // Re-initialize Lucide icons
+            contentBox.appendChild(contentElement);
+            maxWDiv.appendChild(main);
+            root.appendChild(container);
+
+            // Feather icons replacement (using lucide icons in this version)
+            // This ensures the SVG icons render correctly after DOM manipulation
             lucide.createIcons();
+        }
+
+        // --- FIREBASE LOGIC ---
+
+        async function updateAuthState(user) {
+            if (user) {
+                appState.isAuthenticated = true;
+                appState.userId = user.uid;
+               
+                // CRITICAL: Force token refresh to read custom claims (role)
+                try {
+                    const idTokenResult = await user.getIdTokenResult(true);
+                    const role = idTokenResult.claims.role || 'Engineer';
+                    appState.userRole = role;
+                    console.log("User Role set from token claims:", role);
+                } catch (e) {
+                    console.error("Failed to get ID token result:", e);
+                    appState.userRole = 'Engineer';
+                }
+            } else {
+                appState.isAuthenticated = false;
+                appState.userId = null;
+                appState.userRole = 'Engineer';
+            }
+            appState.isAuthReady = true;
+            render(); // Rerender when auth state changes
+           
+            if (appState.isFirebaseReady && appState.isAuthenticated && !appState.dataInitialized) {
+                // Initialize data listeners after authentication is complete
+                initializeDataListeners();
+            }
+        }
+
+        async function initializeDataListeners() {
+            if (!appState.db || !appState.userId) return;
+
+            // Prevent multiple initializations
+            appState.dataInitialized = true;
+
+            const userIdPath = appState.userId;
+
+            const collectionsToListen = [
+                { stateKey: 'assets', path: `artifacts/${appState.appId}/users/${userIdPath}/assets` },
+                { stateKey: 'controls', path: `artifacts/${appState.appId}/users/${userIdPath}/controls` },
+                { stateKey: 'risks', path: `artifacts/${appState.appId}/users/${userIdPath}/risks` },
+                { stateKey: 'tasks', path: `artifacts/${appState.appId}/users/${userIdPath}/tasks` },
+            ];
+
+            collectionsToListen.forEach(({ stateKey, path }) => {
+                const colRef = window.firebase.collection(appState.db, path);
+                const q = window.firebase.query(colRef);
+                window.firebase.onSnapshot(q, (snapshot) => {
+                    appState.data[stateKey] = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+                    render(); // Rerender when data updates
+                }, (err) => {
+                    console.error(`Error fetching ${stateKey}:`, err);
+                    appState.error = `Failed to load ${stateKey} data. Check Firestore rules.`;
+                    render();
+                });
+            });
+
+            // Deployment status listener (public data)
+            const statusDocRef = window.firebase.doc(appState.db, `artifacts/${appState.appId}/public/data/deployment/status`);
+            window.firebase.onSnapshot(statusDocRef, (doc) => {
+                if (doc.exists()) {
+                    appState.deploymentStatus = doc.data();
+                } else {
+                    const defaultStatus = { status: 'Online', lastCheck: window.firebase.serverTimestamp(), message: 'Initial deployment successful.' };
+                    window.firebase.setDoc(statusDocRef, defaultStatus).catch(e => console.error("Error setting default status:", e));
+                    appState.deploymentStatus = defaultStatus;
+                }
+                render();
+            }, (err) => {
+                console.error("Error fetching deployment status:", err);
+                appState.error = "Failed to load deployment status.";
+                render();
+            });
+        }
+
+        async function signInUser() {
+            if (!appState.auth) return;
+            try {
+                const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
+                if (initialAuthToken) {
+                    await window.firebase.signInWithCustomToken(appState.auth, initialAuthToken);
+                    console.log("Signed in with custom token.");
+                } else {
+                    await window.firebase.signInAnonymously(appState.auth);
+                    console.log("Signed in anonymously.");
+                }
+            } catch (e) {
+                console.error("Authentication Error:", e.message);
+                appState.error = "Authentication failed. Check deployment configuration.";
+                appState.isAuthReady = true;
+                render();
+            }
+        }
+
+        async function handleSignOut() {
+            if (appState.auth) {
+                try {
+                    await window.firebase.signOut(appState.auth);
+                    appState.currentView = 'riskDashboard';
+                    appState.error = "Successfully signed out.";
+                    render();
+                } catch (e) {
+                    console.error("Sign out error:", e);
+                    appState.error = "Failed to sign out.";
+                    render();
+                }
+            }
+        }
+
+        // --- INITIALIZATION ---
+        window.onload = function() {
+            initializeConfig();
+           
+            if (firebaseConfig) {
+                try {
+                    const app = window.firebase.initializeApp(firebaseConfig);
+                    appState.db = window.firebase.getFirestore(app);
+                    appState.auth = window.firebase.getAuth(app);
+                    window.firebase.setLogLevel('debug');
+                    appState.isFirebaseReady = true;
+
+                    // Set up auth listener before signing in
+                    window.firebase.onAuthStateChanged(appState.auth, updateAuthState);
+
+                    // Attempt initial sign-in
+                    signInUser();
+                } catch (e) {
+                    console.error("Fatal Firebase Init Error:", e);
+                    appState.error = "Fatal Firebase Initialization Error: Check console.";
+                    appState.isAuthReady = true;
+                }
+            } else {
+                // If no config, set auth ready and render mock mode immediately
+                appState.isAuthReady = true;
+            }
+           
+            render(); // Initial render (will show loading screen or mock mode)
         };
-
-        // Initialize the application
-        initializeFirebase();
-
     </script>
 </body>
 </html>

@@ -3,9 +3,9 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>OT Guardian -ICS/OT Cyber Security Posture Management</title>
+    <title>OT Guardian ICT/OT Cyber Security Posture Management</title>
     <script src="https://cdn.tailwindcss.com"></script>
-    
+   
     <!-- Lucide Icons for UI -->
     <script src="https://unpkg.com/lucide@latest"></script>
 
@@ -37,18 +37,24 @@
         body {
             font-family: 'Inter', sans-serif;
         }
+        @media print {
+            .print-hide { display: none !important; }
+            body, .bg-gray-100 { background-color: white !important; }
+            .print-area { padding: 0 !important; margin: 0 !important; width: 100% !important; }
+        }
     </style>
 
     <script type="module">
+        // Import all necessary Firebase modules
         import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
         import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged, signOut, signInWithEmailAndPassword, createUserWithEmailAndPassword } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
-        import { getFirestore, doc, setDoc, collection, query, onSnapshot, serverTimestamp, setLogLevel, addDoc, getDoc, deleteDoc, where } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+        import { getFirestore, doc, setDoc, collection, query, onSnapshot, serverTimestamp, setLogLevel, addDoc, deleteDoc } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
 
         // Global Firebase and App State variables
         let app = null;
         let db = null;
         let auth = null;
-        
+       
         // Provided environment variables (MUST BE USED)
         const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
         const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {
@@ -60,8 +66,7 @@
             appId: "1:123456789012:web:a1b2c3d4e5f6g7h8i9j0"
         };
         const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
-        
-        // Use the environment variable config
+       
         const MANUAL_FIREBASE_CONFIG = firebaseConfig;
 
         // --- Application State ---
@@ -70,52 +75,43 @@
             isAuthReady: false,
             userId: null,
             email: null,
+            role: 'Guest',
             appId: appId,
-            currentView: 'Dashboard', // Default view
+            currentView: 'RiskDashboard', // Default to the main Risk Dashboard
             error: null,
             data: {
                 tasks: [],
-                sites: [],
+                sites: [
+                    { id: 'site-a', name: 'Melbourne SCADA Center', type: 'Data Center', location: 'Melbourne, VIC', complianceScore: 85, overallRisk: 'Medium' },
+                    { id: 'site-b', name: 'Pump Station 3', type: 'Remote PLC', location: 'Tarneit, VIC', complianceScore: 92, overallRisk: 'Low' },
+                    { id: 'site-c', name: 'Substation B', type: 'Electrical Grid', location: 'Geelong, VIC', complianceScore: 78, overallRisk: 'High' }
+                ],
                 users: [],
             },
-            modal: {
-                isOpen: false,
-                content: '',
-                onConfirm: null,
-                isConfirming: false,
-                confirmButtonText: 'Confirm',
-                title: 'Confirm Action',
-                type: 'confirm' // 'confirm', 'form', 'info'
-            },
+            modal: { isOpen: false, content: '', onConfirm: null, isConfirming: false, confirmButtonText: 'Confirm', title: 'Confirm Action', type: 'confirm' },
             sidebarOpen: false,
-            taskForm: {
-                id: null, // For editing
-                title: '',
-                siteId: '',
-                description: '',
-                severity: 'Medium',
-                status: 'Open',
-                dueDate: '',
-                assignedTo: ''
-            }
+            taskForm: { id: null, title: '', siteId: 'site-a', description: '', severity: 'Medium', status: 'Open', dueDate: '', assignedTo: '' },
         };
 
         // --- Firestore Utilities ---
 
-        /**
-         * Generates the public data path for a given collection.
-         * @param {string} collectionName
-         * @returns {string}
-         */
         function getPublicCollectionPath(collectionName) {
             return `artifacts/${appState.appId}/public/data/${collectionName}`;
+        }
+       
+        function getCurrentUserRole() {
+            if (!appState.userId) return 'Guest';
+            if (auth.currentUser && auth.currentUser.isAnonymous) return 'Guest';
+
+            const userProfile = appState.data.users.find(u => u.userId === appState.userId);
+            if (userProfile && userProfile.role) {
+                return userProfile.role;
+            }
+            return 'Analyst';
         }
 
         // --- State Management and Rendering ---
 
-        /**
-         * Renders the application content by updating the DOM.
-         */
         function render() {
             const appEl = document.getElementById('app');
             if (!appEl) return;
@@ -126,7 +122,6 @@
             }
 
             if (!appState.isAuthReady) {
-                // Show a simple loading state until auth is checked
                 appEl.innerHTML = `
                     <div class="flex items-center justify-center min-h-screen">
                         <div class="text-center p-8 bg-white shadow-xl rounded-xl">
@@ -141,21 +136,15 @@
                 return;
             }
 
-            // Main application structure
             const currentViewFn = VIEWS[`${appState.currentView}View`];
-            const content = currentViewFn ? currentViewFn() : `
-                <div class="text-center p-12">
-                    <h2 class="text-2xl font-bold text-gray-800">404 - View Not Found</h2>
-                    <p class="text-gray-600 mt-2">The requested view (${appState.currentView}) could not be loaded.</p>
-                </div>
-            `;
+            const content = currentViewFn ? currentViewFn() : VIEWS.DefaultErrorView();
 
             appEl.innerHTML = `
                 <div class="min-h-screen flex">
                     ${renderSidebar()}
                     <div class="flex-1 flex flex-col overflow-hidden">
                         ${renderNav()}
-                        <main class="flex-1 overflow-x-hidden overflow-y-auto bg-gray-100 p-4 md:p-6 custom-scrollbar">
+                        <main class="flex-1 overflow-x-hidden overflow-y-auto bg-gray-100 p-4 md:p-6 custom-scrollbar print-area">
                             ${content}
                         </main>
                     </div>
@@ -163,84 +152,74 @@
                 ${renderModal()}
             `;
 
-            // Re-run lucide icon replacement
             if (window.lucide) {
                 window.lucide.createIcons();
-            }
-
-            // Close sidebar on navigation click on mobile
-            if (appState.sidebarOpen) {
-                toggleSidebar();
             }
         }
 
         // --- Authentication Logic ---
 
-        /**
-         * Attempts to sign in using the provided initial custom token.
-         */
         async function attemptCustomTokenSignIn() {
+            const isDummyKey = MANUAL_FIREBASE_CONFIG.apiKey === "dummy-key";
+            if (isDummyKey) {
+                console.warn("Using dummy Firebase config. Skipping sign-in.");
+                return;
+            }
+           
             try {
                 if (initialAuthToken) {
                     await signInWithCustomToken(auth, initialAuthToken);
-                    console.log("Custom token sign-in successful.");
                 } else {
-                    console.warn("No environment token found. Signing in anonymously.");
+                    // Start an anonymous session if no custom token exists
                     await signInAnonymously(auth);
                 }
             } catch (e) {
-                // If custom token fails, fall back to anonymous or just log the error
-                console.error("Custom token sign-in failed. Attempting Anonymous Sign-in.", e);
-                try {
-                    await signInAnonymously(auth);
-                } catch (anonError) {
-                    console.error("Anonymous sign-in also failed:", anonError);
-                    appState.error = "Failed to sign in. Please check console.";
-                    render();
-                }
+                console.error("Authentication Error during initial sign-in attempt:", e);
             }
         }
 
-        /**
-         * Updates the global state when the Firebase Auth state changes.
-         * @param {firebase.User} user
-         */
         function updateAuthState(user) {
             if (user) {
                 appState.userId = user.uid;
-                appState.email = user.email; // Will be null for anonymous users
-                
-                // If it's the first time the auth state is ready, set up listeners
+                appState.email = user.email;
+               
                 if (!appState.isAuthReady) {
+                    // Set up listeners only once
+                    if (user.isAnonymous) { appState.role = 'Guest'; }
                     setupDataListeners();
-                    // If the user signed in anonymously (which happens if no token), nudge them to log in/register
-                    if (user.isAnonymous) {
-                         // Open the LogIn modal automatically for anonymous users to prompt them to register/login
-                         openModal(VIEWS.LogInView(), 'Sign In or Register', 'info');
-                    }
                 }
             } else {
                 appState.userId = null;
                 appState.email = null;
-                // If the user logs out, reset view and data
-                appState.currentView = 'Dashboard';
+                appState.role = 'Guest';
                 appState.data.tasks = [];
-                appState.data.sites = [];
                 appState.data.users = [];
             }
+           
             appState.isAuthReady = true;
+            appState.role = getCurrentUserRole();
+           
+            // Only force the Dashboard view on sign-out
+            if (!user) {
+                appState.currentView = 'RiskDashboard';
+            }
+           
+            // Ensure the modal closes on successful sign-in
+            if (user && !user.isAnonymous && appState.modal.isOpen) {
+                closeModal();
+            }
+
             render();
         }
 
-        /**
-         * Handles user sign-out.
-         */
         async function handleSignOut() {
             try {
                 closeModal();
-                // Instead of just signing out, sign out and then sign back in anonymously
                 await signOut(auth);
-                await signInAnonymously(auth);
+                const isDummyKey = MANUAL_FIREBASE_CONFIG.apiKey === "dummy-key";
+                if (!isDummyKey) {
+                    await signInAnonymously(auth); // Re-establish guest session
+                }
                 appState.error = null;
             } catch (e) {
                 console.error("Sign out error:", e);
@@ -249,13 +228,9 @@
             }
         }
 
-        /**
-         * Handles user login/registration.
-         * @param {Event} e 
-         */
         async function handleAuthFormSubmit(e) {
             e.preventDefault();
-            
+           
             const formType = e.target.getAttribute('data-form-type');
             const email = e.target.email.value;
             const password = e.target.password.value;
@@ -266,40 +241,49 @@
 
             try {
                 if (isRegister) {
-                    await createUserWithEmailAndPassword(auth, email, password);
-                    await saveUserProfile(email, auth.currentUser.uid);
+                    const userCredential = await createUserWithEmailAndPassword(auth, email, password);
+                    await saveUserProfile(email, userCredential.user.uid);
                     appState.error = null;
                 } else {
                     await signInWithEmailAndPassword(auth, email, password);
                     appState.error = null;
                 }
-                closeModal();
+                // Auth listener will handle closing the modal on success
             } catch (error) {
                 console.error("Auth Error:", error);
-                // Update modal content to show error without closing
-                const errorMsg = error.message.includes('email-already-in-use') ? "Email already in use. Please log in or use a different email." :
-                                 error.message.includes('wrong-password') || error.message.includes('user-not-found') ? "Invalid email or password." :
-                                 error.message.includes('weak-password') ? "Password must be at least 6 characters." :
-                                 "Authentication failed. See console for details.";
-                document.getElementById('auth-error-message').innerText = errorMsg;
+                let errorMsg = "Authentication failed. See console for details.";
+                if (error.code === 'auth/email-already-in-use') errorMsg = "Email already in use. Please log in.";
+                else if (error.code === 'auth/invalid-credential') errorMsg = "Invalid email or password.";
+                else if (error.code === 'auth/weak-password') errorMsg = "Password must be at least 6 characters.";
+                else if (error.message.includes('API_KEY_INVALID')) errorMsg = "Firebase API key is not valid.";
+               
+                const errorEl = document.getElementById('auth-error-message');
+                if (errorEl) errorEl.innerText = errorMsg;
+
             } finally {
                 appState.modal.isConfirming = false;
                 renderModal();
             }
         }
 
-        /**
-         * Saves a basic user profile (public data) after registration.
-         * @param {string} email 
-         * @param {string} uid 
-         */
         async function saveUserProfile(email, uid) {
             if (!db) return;
+           
+            let role = 'Analyst';
+            const normalizedEmail = email.toLowerCase();
+           
+            // DEMO ROLE ASSIGNMENT
+            if (normalizedEmail === 'cybermelb@gmail.com') {
+                role = 'Admin';
+            } else if (normalizedEmail === 'faysalhasan2001@yahoo.com') {
+                role = 'Engineer';
+            }
+
             const userRef = doc(db, getPublicCollectionPath('users'), uid);
             await setDoc(userRef, {
                 userId: uid,
                 email: email,
-                role: 'Analyst', // Default role
+                role: role,
                 createdAt: serverTimestamp()
             }, { merge: true });
         }
@@ -307,182 +291,161 @@
 
         // --- Data Listeners ---
 
-        /**
-         * Sets up real-time Firestore listeners for core application data.
-         */
         function setupDataListeners() {
-            if (!db || !appState.userId) {
-                console.warn("Firestore or User ID not ready for listener setup.");
-                return;
-            }
-            console.log("Setting up data listeners for user:", appState.userId);
+            if (!db || !appState.userId) return;
 
             // 1. Tasks Listener (Public data)
             const tasksColRef = collection(db, getPublicCollectionPath('tasks'));
-            const tasksQuery = query(tasksColRef);
-
-            onSnapshot(tasksQuery, (snapshot) => {
+            onSnapshot(tasksColRef, (snapshot) => {
                 appState.data.tasks = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-                // Sort tasks by severity (High, Medium, Low) and then by Due Date
                 const severityOrder = { 'High': 3, 'Medium': 2, 'Low': 1 };
                 appState.data.tasks.sort((a, b) => {
                     const sevA = severityOrder[a.severity] || 0;
                     const sevB = severityOrder[b.severity] || 0;
                     if (sevA !== sevB) return sevB - sevA;
-                    // Then sort by due date
                     return new Date(a.dueDate || '3000-01-01') - new Date(b.dueDate || '3000-01-01');
                 });
                 render();
-            }, (error) => {
-                console.error("Tasks listener failed:", error);
-                appState.error = "Failed to load tasks. See console for details.";
-                render();
-            });
+            }, (error) => { console.error("Tasks listener failed:", error); });
 
-            // 2. Sites/Assets Listener (Public data)
+            // 2. Sites/Assets Listener (Public data) - Using the public path to save sites
             const sitesColRef = collection(db, getPublicCollectionPath('sites'));
-            const sitesQuery = query(sitesColRef);
-
-            onSnapshot(sitesQuery, (snapshot) => {
-                appState.data.sites = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+            onSnapshot(sitesColRef, (snapshot) => {
+                const fetchedSites = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+                if (fetchedSites.length > 0) {
+                     appState.data.sites = fetchedSites;
+                }
                 render();
-            }, (error) => {
-                console.error("Sites listener failed:", error);
-                appState.error = "Failed to load sites/assets. See console for details.";
-                render();
-            });
-            
+            }, (error) => { console.error("Sites listener failed:", error); });
+           
             // 3. Users Listener (Public data)
             const usersColRef = collection(db, getPublicCollectionPath('users'));
-            const usersQuery = query(usersColRef);
-
-            onSnapshot(usersQuery, (snapshot) => {
+            onSnapshot(usersColRef, (snapshot) => {
                 appState.data.users = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+                appState.role = getCurrentUserRole();
                 render();
-            }, (error) => {
-                console.error("Users listener failed:", error);
-                appState.error = "Failed to load user list. See console for details.";
-                render();
-            });
+            }, (error) => { console.error("Users listener failed:", error); });
         }
 
         // --- Navigation and UI Helpers ---
 
-        /**
-         * Changes the current view.
-         * @param {string} viewName - The name of the view to switch to.
-         */
         function navigate(viewName) {
             appState.currentView = viewName;
+            if (appState.sidebarOpen && window.innerWidth < 768) {
+                appState.sidebarOpen = false;
+            }
             render();
         }
 
-        /**
-         * Toggles the mobile sidebar visibility.
-         */
         function toggleSidebar() {
             appState.sidebarOpen = !appState.sidebarOpen;
             render();
         }
+       
+        // CSV UPLOAD STUB
+        function handleCsvUpload(event) {
+            const file = event.target.files[0];
+            if (!file) return;
+
+            if (file.type !== 'text/csv') {
+                document.getElementById('csv-status').innerText = 'Please upload a valid CSV file.';
+                document.getElementById('csv-status').classList.remove('text-green-600');
+                document.getElementById('csv-status').classList.add('text-red-600');
+                return;
+            }
+
+            const reader = new FileReader();
+            reader.onload = (e) => {
+                const csvData = e.target.result;
+                // In a real application, you would parse this CSV and save to Firestore
+                console.log("CSV Data received (Parsing skipped for demo):", csvData.substring(0, 200) + '...');
+                document.getElementById('csv-status').innerText = `Successfully read CSV. Ready to process ${file.name}.`;
+                document.getElementById('csv-status').classList.remove('text-red-600');
+                document.getElementById('csv-status').classList.add('text-green-600');
+               
+                // Placeholder: Simulate processing and saving
+                // Note: Actual implementation would require complex parsing (like PapaParse)
+                // and batching Firestore writes, which is too much for this single file.
+            };
+            reader.readAsText(file);
+        }
+        window.handleCsvUpload = handleCsvUpload;
+
 
         // --- Modal Logic ---
 
-        /**
-         * Opens the modal with dynamic content and optional confirmation handler.
-         * @param {string} contentHtml - The HTML content for the modal body.
-         * @param {string} [title='Confirm Action'] - The title of the modal.
-         * @param {string} [type='confirm'] - 'confirm', 'form', or 'info'.
-         * @param {function} [onConfirm=null] - The callback function for the confirm button.
-         * @param {string} [confirmButtonText='Confirm'] - Text for the confirm button.
-         */
         function openModal(contentHtml, title = 'Confirm Action', type = 'confirm', onConfirm = null, confirmButtonText = 'Confirm') {
-            appState.modal = {
-                isOpen: true,
-                content: contentHtml,
-                onConfirm: onConfirm,
-                isConfirming: false,
-                confirmButtonText: confirmButtonText,
-                title: title,
-                type: type
-            };
+            appState.modal = { isOpen: true, content: contentHtml, onConfirm: onConfirm, isConfirming: false, confirmButtonText: confirmButtonText, title: title, type: type };
             renderModal();
         }
 
-        /**
-         * Closes the modal.
-         */
         function closeModal() {
             appState.modal.isOpen = false;
             appState.modal.onConfirm = null;
             renderModal();
         }
 
-        /**
-         * Handles the confirmation button click inside the modal.
-         */
         async function handleModalConfirm() {
             if (appState.modal.onConfirm) {
                 appState.modal.isConfirming = true;
                 renderModal();
                 try {
                     await appState.modal.onConfirm();
+                    closeModal();
                 } catch (e) {
                     console.error("Modal confirmation failed:", e);
-                    // Optionally display error within the modal
-                } finally {
                     appState.modal.isConfirming = false;
-                    closeModal(); // Close after success or failure, or handle error inside the modal content
+                    renderModal();
                 }
             } else {
                 closeModal();
             }
         }
-        
-        /**
-         * Renders only the modal component.
-         */
+       
         function renderModal() {
             const modalEl = document.getElementById('modal-container');
             if (!modalEl) return;
-            
+           
             if (!appState.modal.isOpen) {
                 modalEl.innerHTML = '';
                 return;
             }
 
-            const isConfirmType = appState.modal.type === 'confirm';
             const isFormType = appState.modal.type === 'form';
-            const isInfoType = appState.modal.type === 'info';
-            
-            const footerContent = isFormType ? `
-                <div id="auth-error-message" class="text-sm text-red-500 font-medium mb-2"></div>
-                <!-- Form handled by the content, buttons are outside the form to submit it -->
-                <button type="button" onclick="closeModal()" class="px-4 py-2 text-sm font-medium text-gray-700 bg-gray-200 rounded-lg hover:bg-gray-300 transition duration-150">
-                    Cancel
-                </button>
-                <button type="submit" form="modal-form" class="px-4 py-2 ml-3 text-sm font-medium text-white bg-indigo-600 rounded-lg hover:bg-indigo-700 transition duration-150 flex items-center justify-center disabled:opacity-50" ${appState.modal.isConfirming ? 'disabled' : ''}>
-                    ${appState.modal.isConfirming ? `<svg class="animate-spin -ml-1 mr-3 h-5 w-5 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg> Processing...` : appState.modal.confirmButtonText}
-                </button>
-            ` : isConfirmType ? `
-                <button onclick="closeModal()" class="px-4 py-2 text-sm font-medium text-gray-700 bg-gray-200 rounded-lg hover:bg-gray-300 transition duration-150">
-                    Cancel
-                </button>
-                <button onclick="handleModalConfirm()" class="px-4 py-2 ml-3 text-sm font-medium text-white bg-red-600 rounded-lg hover:bg-red-700 transition duration-150 flex items-center justify-center disabled:opacity-50" ${appState.modal.isConfirming ? 'disabled' : ''}>
-                    ${appState.modal.isConfirming ? `<svg class="animate-spin -ml-1 mr-3 h-5 w-5 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg> Processing...` : appState.modal.confirmButtonText}
-                </button>
-            ` : `
-                 <button onclick="closeModal()" class="px-4 py-2 text-sm font-medium text-white bg-indigo-600 rounded-lg hover:bg-indigo-700 transition duration-150">
-                    Close
-                </button>
-            `;
+            const isConfirmType = appState.modal.type === 'confirm';
+
+            let footerContent = '';
+            if (isFormType) {
+                footerContent = `
+                    <div id="auth-error-message" class="text-sm text-red-500 font-medium mb-2 w-full text-left"></div>
+                    <button type="button" onclick="window.closeModal()" class="px-4 py-2 text-sm font-medium text-gray-700 bg-gray-200 rounded-lg hover:bg-gray-300 transition duration-150">
+                        Cancel
+                    </button>
+                    <button type="submit" form="modal-form" class="px-4 py-2 ml-3 text-sm font-medium text-white bg-indigo-600 rounded-lg hover:bg-indigo-700 transition duration-150 flex items-center justify-center disabled:opacity-50" ${appState.modal.isConfirming ? 'disabled' : ''}>
+                        ${appState.modal.isConfirming ? `<svg class="animate-spin -ml-1 mr-3 h-5 w-5 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg> Processing...` : appState.modal.confirmButtonText}
+                    </button>
+                `;
+            } else if (isConfirmType) {
+                footerContent = `
+                    <button onclick="window.closeModal()" class="px-4 py-2 text-sm font-medium text-gray-700 bg-gray-200 rounded-lg hover:bg-gray-300 transition duration-150">
+                        Cancel
+                    </button>
+                    <button onclick="window.handleModalConfirm()" class="px-4 py-2 ml-3 text-sm font-medium text-white bg-red-600 rounded-lg hover:bg-red-700 transition duration-150 flex items-center justify-center disabled:opacity-50" ${appState.modal.isConfirming ? 'disabled' : ''}>
+                        ${appState.modal.isConfirming ? `<svg class="animate-spin -ml-1 mr-3 h-5 w-5 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg> Processing...` : appState.modal.confirmButtonText}
+                    </button>
+                `;
+            } else {
+                footerContent = `
+                     <button onclick="window.closeModal()" class="px-4 py-2 text-sm font-medium text-white bg-indigo-600 rounded-lg hover:bg-indigo-700 transition duration-150">
+                        Close
+                    </button>
+                `;
+            }
 
             modalEl.innerHTML = `
                 <div class="fixed inset-0 z-50 overflow-y-auto" aria-labelledby="modal-title" role="dialog" aria-modal="true">
                     <div class="flex items-end justify-center min-h-screen pt-4 px-4 pb-20 text-center sm:block sm:p-0">
-                        <!-- Background overlay -->
-                        <div class="fixed inset-0 bg-gray-500 bg-opacity-75 transition-opacity" aria-hidden="true" onclick="closeModal()"></div>
-
-                        <!-- Modal content container -->
+                        <div class="fixed inset-0 bg-gray-500 bg-opacity-75 transition-opacity" aria-hidden="true" onclick="window.closeModal()"></div>
                         <span class="hidden sm:inline-block sm:align-middle sm:h-screen" aria-hidden="true">&#8203;</span>
                         <div class="inline-block align-bottom bg-white rounded-lg text-left overflow-hidden shadow-xl transform transition-all sm:my-8 sm:align-middle sm:max-w-lg sm:w-full">
                             <div class="bg-white px-4 pt-5 pb-4 sm:p-6 sm:pb-4">
@@ -497,7 +460,7 @@
                                     </div>
                                 </div>
                             </div>
-                            <div class="bg-gray-50 px-4 py-3 sm:px-6 sm:flex sm:flex-row-reverse">
+                            <div class="bg-gray-50 px-4 py-3 sm:px-6 sm:flex sm:flex-row-reverse sm:justify-between items-center">
                                 ${footerContent}
                             </div>
                         </div>
@@ -506,93 +469,63 @@
             `;
         }
 
-        // --- CRUD Operations for Tasks ---
-
-        /**
-         * Opens the modal for creating or editing a task.
-         * @param {string | null} taskId - The ID of the task to edit, or null for new task.
-         */
+        // --- Task CRUD (Shared functions) ---
         function showTaskModal(taskId = null) {
+            if (appState.role === 'Guest') {
+                openModal(`<p>You are a **Guest**. Please <a href="#" onclick="window.openModal(window.VIEWS.LogInView(), 'Sign In or Register', 'form', window.handleAuthFormSubmit, 'Submit')" class="font-medium underline text-indigo-600">Log In</a> to create or edit tasks.</p>`, 'Permission Denied', 'info');
+                return;
+            }
+           
             let task = appState.data.tasks.find(t => t.id === taskId);
-
+            // Form state setup logic... (omitted for brevity, assume logic from previous version is here)
+           
+            // Re-using the logic from the previous version:
             if (taskId && task) {
-                // Editing existing task
                 appState.taskForm = {
-                    id: task.id,
-                    title: task.title || '',
-                    siteId: task.siteId || '',
-                    description: task.description || '',
-                    severity: task.severity || 'Medium',
-                    status: task.status || 'Open',
-                    dueDate: task.dueDate || '',
-                    assignedTo: task.assignedTo || ''
+                    id: task.id, title: task.title || '', siteId: task.siteId || appState.data.sites[0]?.id || '',
+                    description: task.description || '', severity: task.severity || 'Medium', status: task.status || 'Open',
+                    dueDate: task.dueDate ? task.dueDate.split('T')[0] : '', assignedTo: task.assignedTo || ''
                 };
             } else {
-                // Creating new task
                 appState.taskForm = {
-                    id: null,
-                    title: '',
-                    siteId: '',
-                    description: '',
-                    severity: 'Medium',
-                    status: 'Open',
-                    dueDate: '',
-                    assignedTo: appState.userId // Default assignment
+                    id: null, title: '', siteId: appState.data.sites[0]?.id || '', description: '', severity: 'Medium',
+                    status: 'Open', dueDate: new Date().toISOString().split('T')[0], assignedTo: appState.userId
                 };
             }
 
             openModal(VIEWS.TaskFormView(), taskId ? 'Edit Task' : 'Create New Task', 'form', null, taskId ? 'Save Changes' : 'Create Task');
         }
 
-        /**
-         * Handles the submission of the task creation/editing form.
-         * @param {Event} e 
-         */
         async function handleTaskCreation(e) {
             e.preventDefault();
-            if (!db || !appState.userId) return;
+            if (!db || !appState.userId || appState.role === 'Guest') return;
 
             const formData = new FormData(e.target);
             const taskData = Object.fromEntries(formData.entries());
 
-            // Update appState.taskForm with current form values for persistence
             appState.taskForm = { ...appState.taskForm, ...taskData };
-            
-            // Clean and finalize data for Firestore
+           
             const finalTaskData = {
-                ...taskData,
-                siteId: taskData.siteId, // Site ID
-                severity: taskData.severity,
-                status: taskData.status,
-                dueDate: taskData.dueDate,
-                assignedTo: taskData.assignedTo,
-                lastUpdatedBy: appState.userId,
+                ...taskData, siteId: taskData.siteId, severity: taskData.severity, status: taskData.status,
+                dueDate: taskData.dueDate, assignedTo: taskData.assignedTo, lastUpdatedBy: appState.userId,
                 updatedAt: serverTimestamp()
             };
 
             appState.modal.isConfirming = true;
             renderModal();
-            
+           
             try {
                 if (appState.taskForm.id) {
-                    // Update existing task
                     const taskRef = doc(db, getPublicCollectionPath('tasks'), appState.taskForm.id);
                     await setDoc(taskRef, finalTaskData, { merge: true });
                 } else {
-                    // Create new task
                     const tasksColRef = collection(db, getPublicCollectionPath('tasks'));
-                    await addDoc(tasksColRef, {
-                        ...finalTaskData,
-                        createdBy: appState.userId,
-                        createdAt: serverTimestamp()
-                    });
+                    await addDoc(tasksColRef, { ...finalTaskData, createdBy: appState.userId, createdAt: serverTimestamp() });
                 }
                 closeModal();
-                // Optionally navigate back to Dashboard or Task Overview
-                navigate('TaskOverview'); 
+                navigate('RemediationTasks');
             } catch (e) {
                 console.error("Error saving task:", e);
-                // Simple error display for now
                 document.getElementById('task-form-error').innerText = "Error saving task. Check console.";
             } finally {
                 appState.modal.isConfirming = false;
@@ -600,28 +533,16 @@
             }
         }
 
-        /**
-         * Prepares and opens the confirmation modal for task deletion.
-         * @param {string} taskId 
-         */
         function confirmDeleteTask(taskId) {
+            if (appState.role === 'Guest') {
+                 openModal(`<p>You are a **Guest**. Please log in to delete tasks.</p>`, 'Permission Denied', 'info');
+                return;
+            }
             const task = appState.data.tasks.find(t => t.id === taskId);
-            if (!task) return;
-
-            const content = `Are you sure you want to delete the task: **${task.title}**? This action cannot be undone.`;
-            openModal(
-                content,
-                'Delete Task',
-                'confirm',
-                () => deleteTask(taskId),
-                'Delete Permanently'
-            );
+            const content = `Are you sure you want to delete the task: **${task.title}**?`;
+            openModal(content, 'Delete Task', 'confirm', () => deleteTask(taskId), 'Delete Permanently');
         }
 
-        /**
-         * Deletes a task from Firestore.
-         * @param {string} taskId 
-         */
         async function deleteTask(taskId) {
             if (!db || !taskId) return;
             const taskRef = doc(db, getPublicCollectionPath('tasks'), taskId);
@@ -630,26 +551,31 @@
         }
 
         // --- Render Components (Views, Navigation, Sidebar) ---
-        
-        // --- VIEW COMPONENT DEFINITION (FIXES THE ORIGINAL ERROR) ---
-        // Define VIEWS object globally before any functions that rely on it
+       
         const VIEWS = {};
-        
-        /**
-         * Renders the mobile-friendly sidebar.
-         */
+
         function renderSidebar() {
             const navItems = [
-                { name: 'Dashboard', icon: 'layout-dashboard' },
-                { name: 'TaskOverview', label: 'Tasks', icon: 'list-checks' },
-                { name: 'SiteManagement', label: 'Sites & Assets', icon: 'factory' },
+                { name: 'RiskDashboard', label: 'Risk Dashboard', icon: 'shield-alert' },
+                { name: 'ManagerDashboard', label: 'Manager Dashboard', icon: 'trending-up' },
+                { name: 'RemediationTasks', label: 'Remediation Tasks', icon: 'list-checks' },
+                { name: 'AssetBuilder', label: 'Asset Builder', icon: 'factory' },
+                { name: 'SecurityControls', label: 'Security Controls', icon: 'fingerprint' },
+                { name: 'Reports', label: 'Reports', icon: 'file-text' },
                 { name: 'UserManagement', label: 'Users & Roles', icon: 'users' },
+                { name: 'Settings', label: 'Settings', icon: 'settings' },
             ];
+           
+            // Guests can see everything except User Management and Asset Builder (in a real app, they would be read-only on those)
+            const filteredNavItems = navItems.filter(item =>
+                (item.name !== 'UserManagement' && item.name !== 'AssetBuilder') ||
+                (appState.role !== 'Guest')
+            );
 
-            const navLinks = navItems.map(item => `
-                <a href="#" onclick="navigate('${item.name}')" class="flex items-center px-4 py-2 mt-2 text-sm font-medium ${appState.currentView === item.name ? 'bg-indigo-700 text-white shadow-md' : 'text-indigo-200 hover:bg-indigo-600'} transition-colors duration-200 rounded-lg">
+            const navLinks = filteredNavItems.map(item => `
+                <a href="#" onclick="window.navigate('${item.name}')" class="flex items-center px-4 py-2 mt-2 text-sm font-medium ${appState.currentView === item.name ? 'bg-indigo-700 text-white shadow-md' : 'text-indigo-200 hover:bg-indigo-600'} transition-colors duration-200 rounded-lg">
                     <i data-lucide="${item.icon}" class="w-5 h-5 mr-3"></i>
-                    <span>${item.label || item.name.replace(/([A-Z])/g, ' $1').trim()}</span>
+                    <span>${item.label || item.name}</span>
                 </a>
             `).join('');
 
@@ -657,7 +583,7 @@
                 <div class="fixed inset-y-0 left-0 w-64 bg-indigo-800 text-white p-4 z-40 sidebar-transition ${appState.sidebarOpen ? 'sidebar-visible' : '-translate-x-full'} md:relative md:translate-x-0 md:flex md:flex-col print-hide shadow-lg">
                     <div class="text-2xl font-bold mb-6 flex items-center justify-between">
                         OT Guardian
-                        <button class="md:hidden text-indigo-200 hover:text-white" onclick="toggleSidebar()">
+                        <button class="md:hidden text-indigo-200 hover:text-white" onclick="window.toggleSidebar()">
                             <i data-lucide="x" class="w-6 h-6"></i>
                         </button>
                     </div>
@@ -668,42 +594,52 @@
             `;
         }
 
-        /**
-         * Renders the top navigation bar.
-         */
         function renderNav() {
-            const userStatus = appState.userId ? 
-                (appState.email ? `<i data-lucide="mail" class="w-4 h-4 mr-1"></i> ${appState.email}` : `<i data-lucide="user" class="w-4 h-4 mr-1"></i> Anonymous User`) : 
-                'Not Signed In';
-
+            const userRole = appState.role;
+            let userStatus = '';
             let authButtons = '';
+           
+            const roleColor = userRole === 'Admin' ? 'bg-purple-200 text-purple-800' :
+                              userRole === 'Engineer' ? 'bg-teal-200 text-teal-800' :
+                              userRole === 'Analyst' ? 'bg-blue-200 text-blue-800' :
+                              'bg-gray-200 text-gray-800';
+
             if (appState.userId && !auth.currentUser.isAnonymous) {
-                authButtons = `
-                    <button onclick="openModal('You are about to sign out. Are you sure?', 'Sign Out', 'confirm', handleSignOut, 'Yes, Sign Out')" class="ml-4 flex items-center text-sm font-medium text-red-600 hover:text-red-700 transition duration-150">
-                        <i data-lucide="log-out" class="w-5 h-5 mr-1"></i>
-                        Sign Out
+                 userStatus = `
+                    <span class="flex items-center mr-4 text-sm font-medium">
+                        <i data-lucide="mail" class="w-4 h-4 mr-1 text-gray-500"></i> ${appState.email || 'N/A'}
+                    </span>
+                    <span class="px-3 py-1 text-xs font-semibold rounded-full ${roleColor}">
+                        ${userRole}
+                    </span>
+                `;
+                 authButtons = `
+                    <button onclick="window.openModal('You are about to sign out.', 'Sign Out', 'confirm', window.handleSignOut, 'Sign Out')" class="ml-4 flex items-center text-sm font-medium text-red-600 hover:text-red-700 transition duration-150">
+                        <i data-lucide="log-out" class="w-5 h-5 mr-1"></i> Sign Out
                     </button>
                 `;
             } else {
+                 userStatus = `
+                    <span class="flex items-center mr-4 text-sm font-medium text-gray-500">
+                        <i data-lucide="user" class="w-4 h-4 mr-1"></i> Guest Access
+                    </span>
+                `;
                  authButtons = `
-                    <button onclick="openModal(VIEWS.LogInView(), 'Sign In or Register', 'form', handleAuthFormSubmit, 'Submit')" class="ml-4 flex items-center px-3 py-1 bg-indigo-600 text-white rounded-lg text-sm font-medium hover:bg-indigo-700 transition duration-150">
-                        <i data-lucide="log-in" class="w-4 h-4 mr-1"></i>
-                        Log In
+                    <button onclick="window.openModal(window.VIEWS.LogInView(), 'Sign In or Register', 'form', window.handleAuthFormSubmit, 'Submit')" class="ml-4 flex items-center px-3 py-1 bg-indigo-600 text-white rounded-lg text-sm font-medium hover:bg-indigo-700 transition duration-150">
+                        <i data-lucide="log-in" class="w-4 h-4 mr-1"></i> Log In
                     </button>
                 `;
             }
 
             return `
                 <header class="flex items-center justify-between p-4 bg-white border-b print-hide shadow-sm">
-                    <button class="md:hidden text-gray-600 hover:text-gray-800" onclick="toggleSidebar()">
+                    <button class="md:hidden text-gray-600 hover:text-gray-800" onclick="window.toggleSidebar()">
                         <i data-lucide="menu" class="w-6 h-6"></i>
                     </button>
                     <div class="hidden md:block text-xl font-semibold text-gray-800">${appState.currentView.replace(/([A-Z])/g, ' $1').trim()}</div>
-                    
-                    <div class="flex items-center text-gray-600 text-sm">
-                        <span class="flex items-center mr-4">
-                            ${userStatus}
-                        </span>
+                   
+                    <div class="flex items-center text-gray-600">
+                        ${userStatus}
                         ${authButtons}
                     </div>
                 </header>
@@ -714,13 +650,19 @@
         // --- VIEW COMPONENTS (HTML Content Generators) ---
         // ---------------------------------------------
 
-        /**
-         * Login/Registration Form View for Modal.
-         */
+        VIEWS.DefaultErrorView = () => {
+             return `<div class="p-8 text-center text-red-600 bg-red-100 rounded-lg m-4">404 - View Not Found</div>`;
+        }
+
         VIEWS.LogInView = () => {
             return `
-                <form id="modal-form" data-form-type="login" onsubmit="handleAuthFormSubmit(event)" class="space-y-4">
-                    <p class="text-sm text-gray-700">Please sign in or register to access full application features.</p>
+                <form id="modal-form" data-form-type="login" onsubmit="window.handleAuthFormSubmit(event)" class="space-y-4">
+                    <p class="text-sm text-gray-700">Use one of the pre-configured emails for a full demo experience:</p>
+                    <ul class="text-xs text-indigo-500 space-y-1 bg-indigo-50 p-3 rounded-lg">
+                        <li>**Admin:** cybermelb@gmail.com / password</li>
+                        <li>**Engineer:** faysalhasan2001@yahoo.com / password</li>
+                        <li>**Analyst/New User:** any_new_email@test.com / password</li>
+                    </ul>
                     <div>
                         <label for="email" class="block text-sm font-medium text-gray-700">Email Address</label>
                         <input type="email" id="email" name="email" required autocomplete="email" class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500">
@@ -741,117 +683,211 @@
             `;
         };
 
-        /**
-         * Dashboard View.
-         */
-        VIEWS.DashboardView = () => {
+        // --- DASHBOARD VIEWS ---
+
+        VIEWS.RiskDashboardView = () => {
+            const totalAssets = appState.data.sites.length;
             const openTasks = appState.data.tasks.filter(t => t.status === 'Open').length;
-            const highSeverityTasks = appState.data.tasks.filter(t => t.severity === 'High' && t.status === 'Open').length;
-            const totalSites = appState.data.sites.length;
-            const anonWarning = auth.currentUser && auth.currentUser.isAnonymous ? `
-                <div class="bg-yellow-100 border-l-4 border-yellow-500 text-yellow-700 p-4 mb-6 rounded-lg" role="alert">
-                    <p class="font-bold">Anonymous Access</p>
-                    <p>You are currently signed in anonymously. To save and secure your data, please <a href="#" onclick="openModal(VIEWS.LogInView(), 'Sign In or Register', 'form', handleAuthFormSubmit, 'Submit')" class="font-medium underline text-yellow-800">Log In or Register</a>.</p>
+            const avgCompliance = Math.round(appState.data.sites.reduce((sum, s) => sum + s.complianceScore, 0) / totalAssets) || 0;
+            const targetSLAchieved = appState.data.sites.filter(s => s.complianceScore >= 80).length; // Mock SL target of 80%
+
+            const cardData = [
+                { title: 'Total Assets', value: totalAssets, icon: 'factory', color: 'indigo' },
+                { title: 'Overall Compliance', value: `${avgCompliance}%`, icon: 'shield-check', color: 'green' },
+                { title: 'Open Remediation Tasks', value: openTasks, icon: 'alert-octagon', color: 'red' },
+                { title: 'Target SL Achieved', value: `${targetSLAchieved}/${totalAssets}`, icon: 'target', color: 'blue' },
+            ];
+
+            const renderCard = (data) => `
+                <div class="bg-white p-6 rounded-xl shadow-lg border-l-4 border-${data.color}-500">
+                    <div class="flex items-center justify-between">
+                        <p class="text-sm font-medium text-gray-500">${data.title}</p>
+                        <i data-lucide="${data.icon}" class="w-6 h-6 text-${data.color}-500"></i>
+                    </div>
+                    <p class="text-3xl font-bold text-gray-900 mt-1">${data.value}</p>
+                    <p class="text-sm text-gray-400 mt-2">Latest assessment data</p>
                 </div>
-            ` : '';
+            `;
+           
+            return `
+                <div class="space-y-6">
+                    <h1 class="text-3xl font-bold text-gray-900">Operational Risk Dashboard</h1>
+                   
+                    <!-- Key Metrics -->
+                    <div class="grid grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-4">
+                        ${cardData.map(renderCard).join('')}
+                    </div>
 
-            // Simple Task Summary Table
-            const top5Tasks = appState.data.tasks.slice(0, 5);
+                    <!-- Risk Distribution & IEC 62334 Compliance -->
+                    <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                       
+                        <!-- Risk Distribution Heat Map -->
+                        <div class="lg:col-span-2 bg-white p-6 rounded-xl shadow-lg">
+                            <h2 class="text-xl font-semibold text-gray-900 mb-4">Risk Distribution Heat Map</h2>
+                            <p class="text-sm text-gray-500 mb-4">Visual representation of threat likelihood vs. impact across assets.</p>
+                            <!-- Placeholder for Heat Map Visualization -->
+                           
+                            <div class="h-64 flex items-center justify-center bg-gray-50 border border-dashed rounded-lg">
+                                <span class="text-gray-400 text-lg">Risk Heat Map Visualization Area</span>
+                            </div>
+                        </div>
 
-            const taskRows = top5Tasks.map(task => {
-                const severityColor = task.severity === 'High' ? 'bg-red-500' : task.severity === 'Medium' ? 'bg-yellow-500' : 'bg-green-500';
-                return `
-                    <tr class="hover:bg-gray-50 cursor-pointer" onclick="navigate('TaskOverview')">
-                        <td class="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">${task.title}</td>
-                        <td class="px-6 py-4 whitespace-nowrap">
-                            <span class="px-2 inline-flex text-xs leading-5 font-semibold rounded-full ${severityColor} text-white">
-                                ${task.severity}
-                            </span>
-                        </td>
-                        <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">${new Date(task.dueDate).toLocaleDateString()}</td>
-                        <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">${appState.data.sites.find(s => s.id === task.siteId)?.name || 'N/A'}</td>
-                    </tr>
-                `;
-            }).join('');
+                        <!-- Overall IEC 62334 Compliance Gauge -->
+                        <div class="lg:col-span-1 bg-white p-6 rounded-xl shadow-lg flex flex-col items-center">
+                            <h2 class="text-xl font-semibold text-gray-900 mb-4">IEC 62443 Compliance</h2>
+                            <div class="w-48 h-48 flex items-center justify-center bg-green-100 rounded-full border-8 border-green-500">
+                                <span class="text-4xl font-extrabold text-green-700">${avgCompliance}%</span>
+                            </div>
+                            <p class="text-sm text-gray-600 mt-4">Current overall compliance score for all monitored assets against the standard.</p>
+                            <button onclick="window.navigate('SecurityControls')" class="mt-4 text-indigo-600 hover:text-indigo-700 text-sm font-medium">View Controls Detail</button>
+                        </div>
+                    </div>
+                </div>
+            `;
+        };
+       
+        VIEWS.ManagerDashboardView = () => {
+            const currentRiskScore = 3.2; // Mock current
+            const targetRiskScore = 2.5; // Mock target
+            const vulnCount = 145; // Mock vulnerability count
+            const frCoverage = 78; // Mock Foundational Requirement Coverage
+
+            const scoreStatus = currentRiskScore > targetRiskScore ? 'text-red-600' : 'text-green-600';
+            const statusIcon = currentRiskScore > targetRiskScore ? 'arrow-up-right' : 'arrow-down-right';
 
             return `
                 <div class="space-y-6">
-                    ${anonWarning}
-                    <h1 class="text-3xl font-bold text-gray-900">Security Posture Dashboard</h1>
-
-                    <!-- Key Metrics Cards -->
-                    <div class="grid grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-3">
-                        <div class="bg-white p-6 rounded-xl shadow-lg border-l-4 border-indigo-500">
-                            <div class="flex items-center justify-between">
-                                <p class="text-sm font-medium text-gray-500">Open Tasks</p>
-                                <i data-lucide="list-checks" class="w-6 h-6 text-indigo-500"></i>
+                    <h1 class="text-3xl font-bold text-gray-900">Executive Posture Manager Dashboard</h1>
+                    <p class="text-gray-600">Strategic view for executive decision-making, focusing on risk levels and framework coverage.</p>
+                   
+                    <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                        <!-- Risk Score Target vs Current -->
+                        <div class="lg:col-span-1 bg-white p-6 rounded-xl shadow-lg flex flex-col items-center justify-center">
+                            <h2 class="text-lg font-medium text-gray-500">Overall Risk Score (Target: ${targetRiskScore})</h2>
+                            <div class="flex items-end my-4">
+                                <span class="text-6xl font-extrabold ${scoreStatus}">${currentRiskScore}</span>
+                                <i data-lucide="${statusIcon}" class="w-8 h-8 ml-3 ${scoreStatus}"></i>
                             </div>
-                            <p class="text-3xl font-bold text-gray-900 mt-1">${openTasks}</p>
-                            <p class="text-sm text-gray-400 mt-2">Currently being remediated</p>
+                            <p class="text-sm ${scoreStatus}">${currentRiskScore > targetRiskScore ? 'Above Target' : 'On Track'}</p>
                         </div>
 
-                        <div class="bg-white p-6 rounded-xl shadow-lg border-l-4 border-red-500">
-                            <div class="flex items-center justify-between">
-                                <p class="text-sm font-medium text-gray-500">High Severity</p>
-                                <i data-lucide="alert-triangle" class="w-6 h-6 text-red-500"></i>
-                            </div>
-                            <p class="text-3xl font-bold text-gray-900 mt-1">${highSeverityTasks}</p>
-                            <p class="text-sm text-gray-400 mt-2">Requiring immediate attention</p>
+                        <!-- Vulnerability Status -->
+                        <div class="lg:col-span-1 bg-white p-6 rounded-xl shadow-lg">
+                             <h2 class="text-xl font-semibold text-gray-900 mb-4">Vulnerability Status</h2>
+                             <p class="text-5xl font-extrabold text-yellow-600 mb-2">${vulnCount}</p>
+                             <p class="text-sm text-gray-500">Active Vulnerabilities Detected</p>
+                             <div class="mt-4 space-y-2 text-sm">
+                                <p class="flex justify-between">Critical: <span class="font-bold text-red-600">12</span></p>
+                                <p class="flex justify-between">High: <span class="font-bold text-orange-500">35</span></p>
+                                <p class="flex justify-between">Medium/Low: <span class="font-bold text-green-500">${vulnCount - 47}</span></p>
+                             </div>
                         </div>
-
-                        <div class="bg-white p-6 rounded-xl shadow-lg border-l-4 border-green-500">
-                            <div class="flex items-center justify-between">
-                                <p class="text-sm font-medium text-gray-500">Total Sites/Assets</p>
-                                <i data-lucide="factory" class="w-6 h-6 text-green-500"></i>
+                       
+                        <!-- IEC 62443 FR Coverage -->
+                        <div class="lg:col-span-1 bg-white p-6 rounded-xl shadow-lg">
+                            <h2 class="text-xl font-semibold text-gray-900 mb-4">IEC 62443 FR Coverage</h2>
+                            <div class="w-48 h-48 mx-auto flex items-center justify-center bg-blue-100 rounded-full border-8 border-blue-500">
+                                <span class="text-4xl font-extrabold text-blue-700">${frCoverage}%</span>
                             </div>
-                            <p class="text-3xl font-bold text-gray-900 mt-1">${totalSites}</p>
-                            <p class="text-sm text-gray-400 mt-2">Across all locations</p>
+                            <p class="text-sm text-gray-600 mt-4 text-center">Foundational Requirement Coverage Status.</p>
                         </div>
                     </div>
-
-                    <!-- Recent Tasks Table -->
-                    <div class="bg-white rounded-xl shadow-lg overflow-hidden">
-                        <div class="p-6">
-                            <h2 class="text-xl font-semibold text-gray-900 flex justify-between items-center">
-                                Top Priority Tasks
-                                <button onclick="navigate('TaskOverview')" class="text-sm text-indigo-600 hover:text-indigo-700 font-medium flex items-center">
-                                    View All
-                                    <i data-lucide="arrow-right" class="w-4 h-4 ml-1"></i>
-                                </button>
-                            </h2>
-                        </div>
-                        <div class="overflow-x-auto">
-                            <table class="min-w-full divide-y divide-gray-200">
-                                <thead class="bg-gray-50">
-                                    <tr>
-                                        <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Title</th>
-                                        <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Severity</th>
-                                        <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Due Date</th>
-                                        <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Site</th>
-                                    </tr>
-                                </thead>
-                                <tbody class="bg-white divide-y divide-gray-200">
-                                    ${taskRows.length > 0 ? taskRows : `<tr><td colspan="4" class="px-6 py-4 text-center text-gray-500">No open tasks found.</td></tr>`}
-                                </tbody>
-                            </table>
+                   
+                    <!-- Executive Posture Chart -->
+                    <div class="bg-white p-6 rounded-xl shadow-lg">
+                        <h2 class="text-xl font-semibold text-gray-900 mb-4">Risk Score Trend & Target Comparison</h2>
+                       
+                        <div class="h-64 flex items-center justify-center bg-gray-50 border border-dashed rounded-lg">
+                            <span class="text-gray-400 text-lg">Executive Posture Trend Chart (Mock)</span>
                         </div>
                     </div>
                 </div>
             `;
         };
 
-        /**
-         * Task Overview View.
-         */
-        VIEWS.TaskOverviewView = () => {
+        // --- ASSET AND TASK VIEWS ---
+
+        VIEWS.AssetBuilderView = () => {
+             if (appState.role === 'Guest') {
+                return VIEWS.AuthRequiredView('Asset Builder', 'manage assets and inventory');
+            }
+           
+            const siteRows = appState.data.sites.map(site => `
+                <tr class="hover:bg-gray-50">
+                    <td class="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">${site.name}</td>
+                    <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">${site.type}</td>
+                    <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">${site.location}</td>
+                    <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">${site.complianceScore}%</td>
+                    <td class="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
+                        <button class="text-indigo-600 hover:text-indigo-900" onclick="window.alert('Edit Asset: ${site.name}')">Edit</button>
+                    </td>
+                </tr>
+            `).join('');
+
+            return `
+                <div class="space-y-6">
+                    <h1 class="text-3xl font-bold text-gray-900">Asset Inventory & Builder</h1>
+                   
+                    <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
+                        <!-- CSV Uploader -->
+                        <div class="md:col-span-1 bg-white p-6 rounded-xl shadow-lg space-y-3">
+                            <h2 class="text-xl font-semibold text-gray-900">Upload Assets (CSV)</h2>
+                            <p class="text-sm text-gray-500">Quickly add or update assets using a CSV file.</p>
+                            <label class="block">
+                                <span class="sr-only">Choose file</span>
+                                <input type="file" onchange="window.handleCsvUpload(event)" accept=".csv" class="block w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-indigo-50 file:text-indigo-700 hover:file:bg-indigo-100"/>
+                            </label>
+                            <p id="csv-status" class="text-xs text-gray-500">Select a CSV file to upload.</p>
+                            <button class="w-full mt-2 flex items-center justify-center px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition duration-150" onclick="window.alert('Simulating CSV processing and saving to Firestore.')">
+                                <i data-lucide="save" class="w-5 h-5 mr-2"></i> Save Upload
+                            </button>
+                        </div>
+                       
+                        <!-- Add/Edit Asset Card -->
+                         <div class="md:col-span-2 bg-white p-6 rounded-xl shadow-lg space-y-3">
+                            <h2 class="text-xl font-semibold text-gray-900">Asset Management</h2>
+                            <p class="text-sm text-gray-500">Manually add a new asset or edit an existing one.</p>
+                            <button class="w-full flex items-center justify-center px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition duration-150" onclick="window.alert('Open Asset Add/Edit Form Modal')">
+                                <i data-lucide="plus" class="w-5 h-5 mr-2"></i> Add New Asset
+                            </button>
+                            <p class="text-xs text-center text-gray-400 pt-2">Add/Edit Asset Form UI TBD in modal.</p>
+                        </div>
+                    </div>
+
+                    <!-- Asset List -->
+                    <div class="bg-white rounded-xl shadow-lg overflow-x-auto">
+                        <div class="p-6">
+                            <h2 class="text-xl font-semibold text-gray-900">Existing Asset List</h2>
+                        </div>
+                        <table class="min-w-full divide-y divide-gray-200">
+                            <thead class="bg-gray-50">
+                                <tr>
+                                    <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Name</th>
+                                    <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Type</th>
+                                    <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Location</th>
+                                    <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Compliance</th>
+                                    <th scope="col" class="relative px-6 py-3"><span class="sr-only">Edit</span></th>
+                                </tr>
+                            </thead>
+                            <tbody class="bg-white divide-y divide-gray-200">
+                                ${siteRows.length > 0 ? siteRows : `<tr><td colspan="5" class="px-6 py-4 text-center text-gray-500">No assets defined.</td></tr>`}
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            `;
+        };
+
+        VIEWS.RemediationTasksView = () => {
             const tasks = appState.data.tasks;
-            
+            const canEdit = appState.role !== 'Guest';
+           
             const taskCards = tasks.map(task => {
-                const severityClass = task.severity === 'High' ? 'border-red-500 bg-red-50' : 
-                                      task.severity === 'Medium' ? 'border-yellow-500 bg-yellow-50' : 
+                const severityClass = task.severity === 'High' ? 'border-red-500 bg-red-50' :
+                                      task.severity === 'Medium' ? 'border-yellow-500 bg-yellow-50' :
                                       'border-green-500 bg-green-50';
-                const statusColor = task.status === 'Open' ? 'text-red-600' : 
-                                    task.status === 'In Progress' ? 'text-yellow-600' : 
+                const statusColor = task.status === 'Open' ? 'text-red-600' :
+                                    task.status === 'In Progress' ? 'text-yellow-600' :
                                     'text-green-600';
                 const assignedUser = appState.data.users.find(u => u.userId === task.assignedTo);
                 const site = appState.data.sites.find(s => s.id === task.siteId);
@@ -862,12 +898,12 @@
                             <h3 class="text-lg font-semibold text-gray-900">${task.title}</h3>
                             <span class="text-xs font-medium ${statusColor}">${task.status}</span>
                         </div>
-                        <p class="text-sm text-gray-500 mt-1">${task.description.substring(0, 100)}${task.description.length > 100 ? '...' : ''}</p>
-                        
+                        <p class="text-sm text-gray-500 mt-1">${task.description ? task.description.substring(0, 100) : ''}${task.description && task.description.length > 100 ? '...' : ''}</p>
+                       
                         <div class="mt-4 text-xs space-y-1">
                             <p class="flex items-center text-gray-700">
                                 <i data-lucide="calendar" class="w-4 h-4 mr-2 text-indigo-500"></i>
-                                Due: ${new Date(task.dueDate).toLocaleDateString()}
+                                Due: ${task.dueDate ? new Date(task.dueDate).toLocaleDateString() : 'N/A'}
                             </p>
                             <p class="flex items-center text-gray-700">
                                 <i data-lucide="factory" class="w-4 h-4 mr-2 text-indigo-500"></i>
@@ -878,171 +914,220 @@
                                 Assigned: ${assignedUser ? assignedUser.email || 'Anonymous' : 'Unassigned'}
                             </p>
                         </div>
+                        ${canEdit ? `
                         <div class="mt-4 flex space-x-3">
-                            <button onclick="showTaskModal('${task.id}')" class="flex items-center text-sm font-medium text-indigo-600 hover:text-indigo-700">
+                            <button onclick="window.showTaskModal('${task.id}')" class="flex items-center text-sm font-medium text-indigo-600 hover:text-indigo-700">
                                 <i data-lucide="edit-3" class="w-4 h-4 mr-1"></i> Edit
                             </button>
-                            <button onclick="confirmDeleteTask('${task.id}')" class="flex items-center text-sm font-medium text-red-600 hover:text-red-700">
+                            <button onclick="window.confirmDeleteTask('${task.id}')" class="flex items-center text-sm font-medium text-red-600 hover:text-red-700">
                                 <i data-lucide="trash-2" class="w-4 h-4 mr-1"></i> Delete
                             </button>
                         </div>
+                        ` : ''}
                     </div>
                 `;
             }).join('');
+           
+            const openCount = tasks.filter(t => t.status === 'Open').length;
+            const inProgressCount = tasks.filter(t => t.status === 'In Progress').length;
+            const completedCount = tasks.filter(t => t.status === 'Completed').length;
+
+            const cardData = [
+                { title: 'Total Tasks', value: tasks.length, icon: 'clipboard-list', color: 'indigo' },
+                { title: 'Open Tasks', value: openCount, icon: 'inbox', color: 'red' },
+                { title: 'In Progress', value: inProgressCount, icon: 'loader', color: 'yellow' },
+                { title: 'Completed', value: completedCount, icon: 'check-circle', color: 'green' },
+            ];
+
 
             return `
                 <div class="space-y-6">
                     <div class="flex justify-between items-center">
-                        <h1 class="text-3xl font-bold text-gray-900">Task Overview (${tasks.length} Total)</h1>
-                        <button onclick="showTaskModal(null)" class="flex items-center px-4 py-2 bg-indigo-600 text-white rounded-lg shadow-md hover:bg-indigo-700 transition duration-150">
-                            <i data-lucide="plus" class="w-5 h-5 mr-2"></i> New Task
-                        </button>
+                        <h1 class="text-3xl font-bold text-gray-900">Remediation Tasks</h1>
+                        ${canEdit ? `
+                            <button onclick="window.showTaskModal(null)" class="flex items-center px-4 py-2 bg-indigo-600 text-white rounded-lg shadow-md hover:bg-indigo-700 transition duration-150">
+                                <i data-lucide="plus" class="w-5 h-5 mr-2"></i> New Task
+                            </button>
+                        ` : '<span class="text-sm text-gray-500">Log in to create tasks.</span>'}
+                    </div>
+                   
+                    <div class="grid grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-4">
+                        ${cardData.map(d => `
+                            <div class="bg-white p-4 rounded-xl shadow-lg border-l-4 border-${d.color}-500">
+                                <p class="text-sm font-medium text-gray-500">${d.title}</p>
+                                <p class="text-2xl font-bold text-gray-900 mt-1">${d.value}</p>
+                            </div>
+                        `).join('')}
                     </div>
 
                     <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 custom-scrollbar">
-                        ${taskCards.length > 0 ? taskCards : '<div class="col-span-full p-10 text-center text-gray-500 bg-white rounded-xl shadow-md">No tasks have been created yet.</div>'}
+                        ${taskCards.length > 0 ? taskCards : '<div class="col-span-full p-10 text-center text-gray-500 bg-white rounded-xl shadow-md">No tasks found.</div>'}
                     </div>
                 </div>
             `;
         };
-        
-        /**
-         * Task Creation/Edit Form View for Modal.
-         */
+       
         VIEWS.TaskFormView = () => {
             const form = appState.taskForm;
-            const isEdit = !!form.id;
-
-            // Options for select inputs
             const severityOptions = ['Low', 'Medium', 'High'];
             const statusOptions = ['Open', 'In Progress', 'Completed', 'On Hold'];
             const siteOptions = appState.data.sites;
-            const assignedUserOptions = appState.data.users.map(u => ({ id: u.userId, label: u.email || `Anonymous: ${u.userId.substring(0, 8)}...` }));
-            
+            const assignedUserOptions = appState.data.users.map(u => ({ id: u.userId, label: u.email || `User: ${u.userId.substring(0, 8)}...` }));
+           
             return `
-                <form id="modal-form" data-form-type="task" onsubmit="handleTaskCreation(event)" class="space-y-4">
+                <form id="modal-form" data-form-type="task" onsubmit="window.handleTaskCreation(event)" class="space-y-4">
                     <p id="task-form-error" class="text-sm text-red-500 font-medium"></p>
-                    
-                    <div>
-                        <label for="title" class="block text-sm font-medium text-gray-700">Title <span class="text-red-500">*</span></label>
-                        <input type="text" id="title" name="title" value="${form.title}" required class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:ring-indigo-500 focus:border-indigo-500">
-                    </div>
-
-                    <div>
-                        <label for="siteId" class="block text-sm font-medium text-gray-700">Affected Site/Asset <span class="text-red-500">*</span></label>
+                    <div><label for="title" class="block text-sm font-medium text-gray-700">Title <span class="text-red-500">*</span></label>
+                        <input type="text" id="title" name="title" value="${form.title}" required class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:ring-indigo-500 focus:border-indigo-500"></div>
+                    <div><label for="siteId" class="block text-sm font-medium text-gray-700">Affected Site/Asset <span class="text-red-500">*</span></label>
                         <select id="siteId" name="siteId" required class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:ring-indigo-500 focus:border-indigo-500">
                             <option value="">-- Select Site/Asset --</option>
-                            ${siteOptions.map(site => 
-                                `<option value="${site.id}" ${form.siteId === site.id ? 'selected' : ''}>${site.name} (${site.type})</option>`
-                            ).join('')}
-                        </select>
-                    </div>
-
-                    <div>
-                        <label for="description" class="block text-sm font-medium text-gray-700">Description <span class="text-red-500">*</span></label>
-                        <textarea id="description" name="description" rows="3" required class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:ring-indigo-500 focus:border-indigo-500">${form.description}</textarea>
-                    </div>
-
+                            ${siteOptions.map(site => `<option value="${site.id}" ${form.siteId === site.id ? 'selected' : ''}>${site.name} (${site.type})</option>`).join('')}
+                        </select></div>
+                    <div><label for="description" class="block text-sm font-medium text-gray-700">Description <span class="text-red-500">*</span></label>
+                        <textarea id="description" name="description" rows="3" required class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:ring-indigo-500 focus:border-indigo-500">${form.description}</textarea></div>
                     <div class="grid grid-cols-2 gap-4">
-                        <div>
-                            <label for="severity" class="block text-sm font-medium text-gray-700">Severity <span class="text-red-500">*</span></label>
+                        <div><label for="severity" class="block text-sm font-medium text-gray-700">Severity <span class="text-red-500">*</span></label>
                             <select id="severity" name="severity" required class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:ring-indigo-500 focus:border-indigo-500">
-                                ${severityOptions.map(opt => 
-                                    `<option value="${opt}" ${form.severity === opt ? 'selected' : ''}>${opt}</option>`
-                                ).join('')}
-                            </select>
-                        </div>
-                        <div>
-                            <label for="status" class="block text-sm font-medium text-gray-700">Status <span class="text-red-500">*</span></label>
+                                ${severityOptions.map(opt => `<option value="${opt}" ${form.severity === opt ? 'selected' : ''}>${opt}</option>`).join('')}
+                            </select></div>
+                        <div><label for="status" class="block text-sm font-medium text-gray-700">Status <span class="text-red-500">*</span></label>
                             <select id="status" name="status" required class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:ring-indigo-500 focus:border-indigo-500">
-                                ${statusOptions.map(opt => 
-                                    `<option value="${opt}" ${form.status === opt ? 'selected' : ''}>${opt}</option>`
-                                ).join('')}
-                            </select>
-                        </div>
+                                ${statusOptions.map(opt => `<option value="${opt}" ${form.status === opt ? 'selected' : ''}>${opt}</option>`).join('')}
+                            </select></div>
                     </div>
-
                     <div class="grid grid-cols-2 gap-4">
-                        <div>
-                            <label for="dueDate" class="block text-sm font-medium text-gray-700">Due Date <span class="text-red-500">*</span></label>
-                            <input type="date" id="dueDate" name="dueDate" value="${form.dueDate}" required class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:ring-indigo-500 focus:border-indigo-500">
-                        </div>
-                        <div>
-                            <label for="assignedTo" class="block text-sm font-medium text-gray-700">Assigned To <span class="text-red-500">*</span></label>
+                        <div><label for="dueDate" class="block text-sm font-medium text-gray-700">Due Date <span class="text-red-500">*</span></label>
+                            <input type="date" id="dueDate" name="dueDate" value="${form.dueDate}" required class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:ring-indigo-500 focus:border-indigo-500"></div>
+                        <div><label for="assignedTo" class="block text-sm font-medium text-gray-700">Assigned To <span class="text-red-500">*</span></label>
                             <select id="assignedTo" name="assignedTo" required class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:ring-indigo-500 focus:border-indigo-500">
                                 <option value="">-- Select User --</option>
-                                ${assignedUserOptions.map(user => 
-                                    `<option value="${user.id}" ${form.assignedTo === user.id ? 'selected' : ''}>${user.label}</option>`
-                                ).join('')}
-                            </select>
-                        </div>
+                                ${assignedUserOptions.map(user => `<option value="${user.id}" ${form.assignedTo === user.id ? 'selected' : ''}>${user.label}</option>`).join('')}
+                            </select></div>
                     </div>
                 </form>
             `;
         };
 
-        /**
-         * Site Management View (Stub for future implementation).
-         */
-        VIEWS.SiteManagementView = () => {
-             const siteRows = appState.data.sites.map(site => `
-                <tr class="hover:bg-gray-50">
-                    <td class="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">${site.name}</td>
-                    <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">${site.type}</td>
-                    <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">${site.location}</td>
-                    <td class="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
-                        <button class="text-indigo-600 hover:text-indigo-900">Edit</button>
-                    </td>
-                </tr>
-            `).join('');
+        // --- FRAMEWORKS AND COMPLIANCE VIEWS ---
+       
+        VIEWS.SecurityControlsView = () => {
+            const frameworks = [
+                { name: 'IEC 62443', description: 'International standards for security in industrial automation and control systems (IACS). This is the foundational requirement for the assessment.', icon: 'globe' },
+                { name: 'CIS Fortify', description: 'Focuses on critical security controls for protecting industrial environments, often used for operational security hardening.', icon: 'settings-2' },
+                { name: 'SANS 5 Critical Control', description: 'A simplified, high-priority subset of controls for immediate and effective defense against modern attacks.', icon: 'lock' },
+            ];
 
             return `
                 <div class="space-y-6">
-                    <div class="flex justify-between items-center">
-                        <h1 class="text-3xl font-bold text-gray-900">Sites & Asset Management (${appState.data.sites.length} Total)</h1>
-                        <button class="flex items-center px-4 py-2 bg-indigo-600 text-white rounded-lg shadow-md hover:bg-indigo-700 transition duration-150">
-                            <i data-lucide="plus" class="w-5 h-5 mr-2"></i> New Site
-                        </button>
-                    </div>
+                    <h1 class="text-3xl font-bold text-gray-900">Security Controls & Frameworks</h1>
+                    <p class="text-gray-600">This page links assessed security controls to their governing frameworks, ensuring comprehensive and standards-based compliance tracking.</p>
 
-                    <div class="bg-white rounded-xl shadow-lg overflow-x-auto">
-                        <table class="min-w-full divide-y divide-gray-200">
-                            <thead class="bg-gray-50">
-                                <tr>
-                                    <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Name</th>
-                                    <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Type</th>
-                                    <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Location</th>
-                                    <th scope="col" class="relative px-6 py-3"><span class="sr-only">Edit</span></th>
-                                </tr>
-                            </thead>
-                            <tbody class="bg-white divide-y divide-gray-200">
-                                ${siteRows.length > 0 ? siteRows : `<tr><td colspan="4" class="px-6 py-4 text-center text-gray-500">No sites/assets defined.</td></tr>`}
-                            </tbody>
-                        </table>
+                    <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
+                        ${frameworks.map(f => `
+                            <div class="bg-white p-6 rounded-xl shadow-lg border-t-4 border-indigo-500 space-y-3">
+                                <i data-lucide="${f.icon}" class="w-8 h-8 text-indigo-600"></i>
+                                <h2 class="text-xl font-semibold text-gray-900">${f.name}</h2>
+                                <p class="text-sm text-gray-600">${f.description}</p>
+                                <button class="text-indigo-600 hover:text-indigo-700 text-sm font-medium flex items-center mt-2" onclick="window.alert('Viewing details for ${f.name}')">
+                                    Control Mapping <i data-lucide="arrow-right" class="w-4 h-4 ml-1"></i>
+                                </button>
+                            </div>
+                        `).join('')}
+                    </div>
+                   
+                    <div class="bg-white p-6 rounded-xl shadow-lg">
+                        <h2 class="text-xl font-semibold text-gray-900 mb-4">IEC 62443 Structure Overview</h2>
+                       
+                        <div class="h-64 flex items-center justify-center bg-gray-50 border border-dashed rounded-lg">
+                            <span class="text-gray-400 text-lg">Detailed Visual of IEC 62443 Parts/Levels</span>
+                        </div>
                     </div>
                 </div>
             `;
         };
 
-        /**
-         * User Management View (Stub for future implementation).
-         */
+        VIEWS.ReportsView = () => {
+            return `
+                <div class="space-y-6">
+                    <h1 class="text-3xl font-bold text-gray-900">Compliance & Risk Reporting</h1>
+                    <p class="text-gray-600">Generate and export official reports for auditing and executive review.</p>
+
+                    <div class="bg-white p-6 rounded-xl shadow-lg space-y-4">
+                        <h2 class="text-xl font-semibold text-gray-900 border-b pb-2">Report Generation Filters</h2>
+                       
+                        <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+                            <!-- Report Type -->
+                            <div>
+                                <label for="reportType" class="block text-sm font-medium text-gray-700">Report Type</label>
+                                <select id="reportType" class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md">
+                                    <option>Executive Summary</option>
+                                    <option>Control Status Detail (IEC 62443)</option>
+                                    <option>Risk Distribution Analysis</option>
+                                </select>
+                            </div>
+                            <!-- Filter by Zone -->
+                            <div>
+                                <label for="filterZone" class="block text-sm font-medium text-gray-700">Filter by Zone</label>
+                                <select id="filterZone" class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md">
+                                    <option>All Zones</option>
+                                    <option>Melbourne SCADA</option>
+                                    <option>Pump Station 3</option>
+                                    <option>Substation B</option>
+                                </select>
+                            </div>
+                            <!-- Date Range -->
+                            <div>
+                                <label for="dateRange" class="block text-sm font-medium text-gray-700">Assessment Date Range</label>
+                                <input type="date" id="dateRange" class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md">
+                            </div>
+                        </div>
+
+                        <div class="flex space-x-4 pt-4">
+                            <button class="flex items-center px-4 py-2 bg-indigo-600 text-white rounded-lg shadow-md hover:bg-indigo-700 transition duration-150" onclick="window.alert('Generating Report...')">
+                                <i data-lucide="file-text" class="w-5 h-5 mr-2"></i> Generate Preview
+                            </button>
+                            <button class="flex items-center px-4 py-2 bg-green-600 text-white rounded-lg shadow-md hover:bg-green-700 transition duration-150" onclick="window.print()">
+                                <i data-lucide="printer" class="w-5 h-5 mr-2"></i> Print Report (PDF)
+                            </button>
+                        </div>
+                    </div>
+                   
+                    <div class="bg-white p-6 rounded-xl shadow-lg min-h-64">
+                        <h2 class="text-xl font-semibold text-gray-900">Report Preview Area</h2>
+                        <p class="text-gray-500 text-sm mt-2">Generated report content will appear here before printing/export.</p>
+                        <div class="mt-4 border border-dashed p-4 text-center text-gray-400">
+                            Example: Executive Summary of Risk Posture as of ${new Date().toLocaleDateString()}.
+                        </div>
+                    </div>
+                </div>
+            `;
+        };
+
         VIEWS.UserManagementView = () => {
-            const userRows = appState.data.users.map(user => `
-                <tr class="hover:bg-gray-50">
-                    <td class="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">${user.email || user.userId}</td>
-                    <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">${user.role || 'Analyst'}</td>
-                    <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">${user.userId}</td>
-                    <td class="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
-                        <button class="text-indigo-600 hover:text-indigo-900">Edit Role</button>
-                    </td>
-                </tr>
-            `).join('');
+            if (appState.role === 'Guest') {
+                return VIEWS.AuthRequiredView('User Management', 'manage user accounts and roles');
+            }
+           
+            const userRows = appState.data.users.map(user => {
+                const isCurrentUser = user.userId === appState.userId;
+                return `
+                    <tr class="hover:bg-gray-50 ${isCurrentUser ? 'bg-indigo-50' : ''}">
+                        <td class="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">${user.email || 'N/A'} ${isCurrentUser ? '(You)' : ''}</td>
+                        <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">${user.role || 'Analyst'}</td>
+                        <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500 truncate max-w-xs" title="${user.userId}">${user.userId}</td>
+                        <td class="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
+                            ${appState.role === 'Admin' && !isCurrentUser ? '<button class="text-indigo-600 hover:text-indigo-900" onclick="window.alert(\'Changing role for: ' + user.email + '\')">Edit Role</button>' : '<span class="text-gray-400">N/A</span>'}
+                        </td>
+                    </tr>
+                `;
+            }).join('');
 
             return `
                 <div class="space-y-6">
                     <h1 class="text-3xl font-bold text-gray-900">User & Role Management (${appState.data.users.length} Total)</h1>
-                    
+                    <p class="text-gray-600">Current Role: **${appState.role}**</p>
+                   
                     <div class="bg-white rounded-xl shadow-lg overflow-x-auto">
                         <table class="min-w-full divide-y divide-gray-200">
                             <thead class="bg-gray-50">
@@ -1061,6 +1146,71 @@
                 </div>
             `;
         };
+       
+        VIEWS.SettingsView = () => {
+            return `
+                <div class="space-y-6">
+                    <h1 class="text-3xl font-bold text-gray-900">Assessment & System Settings</h1>
+                   
+                    <!-- Assessment Planning -->
+                    <div class="bg-white p-6 rounded-xl shadow-lg space-y-4">
+                        <h2 class="text-xl font-semibold text-gray-900 border-b pb-2">Assessment Planning</h2>
+                        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                            <div>
+                                <label for="targetSL" class="block text-sm font-medium text-gray-700">Target Security Level (SL)</label>
+                                <select id="targetSL" class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md">
+                                    <option>SL-T: 1 (General)</option>
+                                    <option selected>SL-T: 2 (Moderate)</option>
+                                    <option>SL-T: 3 (High)</option>
+                                </select>
+                                <p class="text-xs text-gray-500 mt-1">Defines the required rigor for control implementation.</p>
+                            </div>
+                            <div>
+                                <label for="assessmentFreq" class="block text-sm font-medium text-gray-700">Assessment Frequency</label>
+                                <select id="assessmentFreq" class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md">
+                                    <option>Quarterly</option>
+                                    <option selected>Semi-Annually</option>
+                                    <option>Annually</option>
+                                </select>
+                            </div>
+                        </div>
+                         <button class="px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700" onclick="window.alert('Settings Saved!')">Save Assessment Settings</button>
+                    </div>
+
+                    <!-- Admin & User Guide -->
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+                        <div class="bg-white p-6 rounded-xl shadow-lg">
+                            <h2 class="text-xl font-semibold text-gray-900">Admin Dashboard Access</h2>
+                            <p class="text-sm text-gray-600 mt-2">Quick access to backend monitoring and system health checks.</p>
+                            <button class="mt-4 w-full px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 disabled:opacity-50" ${appState.role !== 'Admin' ? 'disabled' : ''} onclick="window.alert('Launching Admin Console (Mock)')">
+                                Launch Admin Console
+                            </button>
+                            ${appState.role !== 'Admin' ? '<p class="text-xs text-red-500 mt-1">Requires Admin role.</p>' : ''}
+                        </div>
+                        <div class="bg-white p-6 rounded-xl shadow-lg">
+                            <h2 class="text-xl font-semibold text-gray-900">User Guide & Help</h2>
+                            <p class="text-sm text-gray-600 mt-2">Documentation and tutorials for using OT Guardian.</p>
+                            <button class="mt-4 w-full px-4 py-2 bg-gray-600 text-white rounded-lg hover:bg-gray-700" onclick="window.alert('Opening User Guide (Mock)')">
+                                <i data-lucide="book-open" class="w-5 h-5 inline mr-2"></i> View Documentation
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            `;
+        }
+
+        /**
+         * Generic view for access denied pages.
+         */
+        VIEWS.AuthRequiredView = (pageTitle, action) => {
+            return `
+                <div class="bg-red-100 border-l-4 border-red-500 text-red-700 p-8 rounded-lg shadow-lg">
+                    <h1 class="text-2xl font-bold mb-3 flex items-center"><i data-lucide="lock" class="w-6 h-6 mr-3"></i> Access Restricted: ${pageTitle}</h1>
+                    <p class="text-lg">You are signed in as a **Guest** and do not have permission to ${action}.</p>
+                    <p class="mt-4">Please <a href="#" onclick="window.openModal(window.VIEWS.LogInView(), 'Sign In or Register', 'form', window.handleAuthFormSubmit, 'Submit')" class="font-medium underline text-red-800">Log In or Register</a> with an authorized account (Admin/Engineer/Analyst) for full access.</p>
+                </div>
+            `;
+        }
 
 
         // --- Expose global functions for inline handlers ---
@@ -1074,29 +1224,25 @@
         window.showTaskModal = showTaskModal;
         window.handleTaskCreation = handleTaskCreation;
         window.confirmDeleteTask = confirmDeleteTask;
-        window.VIEWS = VIEWS; // Ensure VIEWS is also available globally
-
+        window.VIEWS = VIEWS;
+        // window.handleCsvUpload is already exposed above
 
         // --- Initialization ---
         window.onload = function () {
-            // Append modal container to the body once
             const modalContainer = document.createElement('div');
             modalContainer.id = 'modal-container';
             document.body.appendChild(modalContainer);
-            
+           
             try {
-                // Initialize using the configuration
-                const app = initializeApp(MANUAL_FIREBASE_CONFIG);
+                app = initializeApp(MANUAL_FIREBASE_CONFIG);
                 db = getFirestore(app);
                 auth = getAuth(app);
                 setLogLevel('debug');
                 appState.isFirebaseReady = true;
                 appState.appId = MANUAL_FIREBASE_CONFIG.projectId;
-                
-                // Set up auth listener (this updates appState.isAuthReady and calls render/data listeners)
+               
                 onAuthStateChanged(auth, updateAuthState);
 
-                // Start the sign-in process
                 attemptCustomTokenSignIn();
 
             } catch (e) {

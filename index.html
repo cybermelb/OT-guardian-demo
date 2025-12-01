@@ -3,14 +3,14 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>OT Guardian App </title>
+    <title>OT Guardian App (V3 - Finalized Deployment)</title>
     <!-- Load Tailwind CSS -->
     <script src="https://cdn.tailwindcss.com"></script>
    
-    <!-- Load Lucide Icons (Vanilla JS Friendly SVG icons) -->
+    <!-- Load Lucide Icons -->
     <script src="https://unpkg.com/lucide@latest"></script>
 
-    <!-- Print/PDF Optimization -->
+    <!-- Print/PDF Optimization for Reports -->
     <style>
         @media print {
             .print-hide { display: none !important; }
@@ -20,21 +20,37 @@
         }
     </style>
 
-    <!-- Load Firebase SDKs -->
+    <!-- Load Firebase SDKs as a module for global use -->
     <script type="module">
         import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
         import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged, signOut } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
         import { getFirestore, doc, setDoc, collection, query, onSnapshot, serverTimestamp, setLogLevel } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
 
-        // Expose Firebase services globally for Vanilla JS to use
-        window.firebase = { initializeApp, getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged, signOut, getFirestore, doc, setDoc, collection, query, onSnapshot, serverTimestamp, setLogLevel };
+        // Expose Firebase services globally for the main Vanilla JS script
+        window.firebase = {
+            initializeApp, getAuth, signInAnonymously, signInWithCustomToken,
+            onAuthStateChanged, signOut, getFirestore, doc, setDoc,
+            collection, query, onSnapshot, serverTimestamp, setLogLevel
+        };
     </script>
 </head>
 <body class="bg-gray-100 min-h-screen font-[Inter]">
-    <!-- This is the container where the Vanilla JS app will render -->
+    <!-- Root Container -->
     <div id="root" class="min-h-screen"></div>
 
     <script>
+        // --- HARDCODED FIREBASE CONFIGURATION (User provided values) ---
+        const MANUAL_FIREBASE_CONFIG = {
+            apiKey: "AIzaSyAyDKqA-j9yjp4KeGPGR49Cr6_q_drxBVs",
+            authDomain: "otgaurdian.firebaseapp.com",
+            projectId: "otgaurdian",
+            storageBucket: "otgaurdian.firebasestorage.app",
+            messagingSenderId: "719542806938",
+            appId: "1:719542806938:web:ed9376fcc7d04851e47223",
+            measurementId: "G-9FMPGC5C93"
+        };
+        const DEFAULT_APP_ID = MANUAL_FIREBASE_CONFIG.projectId;
+
         // --- GLOBAL APP STATE ---
         const appState = {
             currentView: 'riskDashboard',
@@ -42,61 +58,16 @@
             isAuthReady: false,
             isFirebaseReady: false,
             userId: null,
-            userRole: 'Engineer', // Default role
+            userRole: 'Engineer',
             data: { assets: [], controls: [], risks: [], tasks: [] },
             deploymentStatus: { status: 'Unknown', message: 'Initializing...', lastCheck: null },
             error: null,
             db: null,
             auth: null,
-            appId: 'default-app-id',
-            // Mock data fallback for non-deployed/unconfigured environments
-            mockData: {
-                assets: [{ id: 'a1', name: 'PLC-101', location: 'Floor 1', type: 'Controller' }],
-                controls: [{ id: 'c1', name: 'Network Segmentation', status: 'Deployed' }],
-                risks: [{ id: 'r1', description: 'Unpatched firmware', assetId: 'a1', severity: 'Critical', status: 'Open' }],
-                tasks: []
-            }
+            appId: DEFAULT_APP_ID, // Default to hardcoded project ID
+            dataInitialized: false
         };
 
-        // --- FIREBASE CONFIGURATION SETUP (ROBUST DEPLOYMENT FIX) ---
-        let firebaseConfig = null;
-
-        function initializeConfig() {
-            try {
-                // 1. Attempt to load platform config (Gemini environment)
-                const fConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : null;
-                appState.appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
-
-                if (fConfig && fConfig.projectId) {
-                    firebaseConfig = fConfig;
-                } else {
-                    console.warn("Platform Firebase config missing. Checking manual fallback.");
-                   
-                    // 2. Fallback for external deployment (e.g., Git) - MANUAL CONFIG GOES HERE
-                    
-                    firebaseConfig = {
-                        apiKey: "AIzaSyAyDKqA-j9yjp4KeGPGR49Cr6_q_drxBVs",
-  authDomain: "otgaurdian.firebaseapp.com",
-  projectId: "otgaurdian",
-  storageBucket: "otgaurdian.firebasestorage.app",
-  messagingSenderId: "719542806938",
-  appId: "1:719542806938:web:ed9376fcc7d04851e47223",
-  measurementId: "G-9FMPGC5C93"
-                    };
-                    
-
-                    if (!firebaseConfig) {
-                        const failMsg = "CRITICAL: No Firebase configuration available. Running in read-only mock mode.";
-                        console.error(failMsg);
-                        appState.error = failMsg + " (Manually add config for external deployment.)";
-                    }
-                }
-            } catch (e) {
-                console.error("Error parsing Firebase config:", e);
-                appState.error = "Error initializing configuration.";
-            }
-        }
-       
         // --- HELPER FUNCTIONS ---
        
         function createElement(tag, classes = '', content = '') {
@@ -121,9 +92,7 @@
 
         function createMessageBox(type, message, onClose) {
             if (!message) return createElement('div');
-           
             let colorClass, IconName;
-
             switch (type) {
                 case 'success':
                     colorClass = "bg-green-100 text-green-800 border border-green-300";
@@ -137,40 +106,80 @@
                     colorClass = "bg-blue-100 text-blue-800 border border-blue-300";
                     IconName = 'info';
             }
-
             const box = createElement('div', `p-4 rounded-xl shadow-lg flex items-center mb-4 transition-all duration-300 ${colorClass}`);
-           
             box.appendChild(getIcon(IconName, 'w-5 h-5 mr-3 flex-shrink-0'));
             box.appendChild(createElement('span', 'text-sm font-medium flex-grow', message));
-           
             if (onClose) {
                 const closeBtn = createElement('button', 'ml-4 text-gray-500 hover:text-gray-700');
                 closeBtn.appendChild(getIcon('x', 'w-4 h-4'));
                 closeBtn.addEventListener('click', onClose);
                 box.appendChild(closeBtn);
             }
-           
             return box;
         }
+       
+        function getSeverityClass(severity) {
+            switch (severity) {
+                case 'Critical': return 'bg-red-100 text-red-800 border-red-500';
+                case 'High': return 'bg-yellow-100 text-yellow-800 border-yellow-500';
+                case 'Medium': return 'bg-orange-100 text-orange-800 border-orange-500';
+                default: return 'bg-blue-100 text-blue-800 border-blue-500';
+            }
+        }
 
-        // --- VIEW CREATION FUNCTIONS ---
-
+        // --- EXPORT FUNCTIONS ---
+        function exportToCSV(filename, data, columns) {
+            if (data.length === 0) {
+                console.error("No data to export!");
+                return;
+            }
+            const header = columns.map(col => `"${col.header}"`).join(',');
+            const rows = data.map(row => {
+                return columns.map(col => {
+                    const value = row[col.field] !== undefined && row[col.field] !== null ? String(row[col.field]).replace(/"/g, '""') : '';
+                    return `"${value}"`;
+                }).join(',');
+            }).join('\n');
+            const csvContent = header + '\n' + rows;
+            const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+            const link = document.createElement("a");
+            if (link.download !== undefined) {
+                const url = URL.createObjectURL(blob);
+                link.setAttribute("href", url);
+                link.setAttribute("download", filename);
+                link.style.visibility = 'hidden';
+                document.body.appendChild(link);
+                link.click();
+                document.body.removeChild(link);
+            } else {
+                console.warn("Your browser does not support CSV download.");
+            }
+        }
+       
+        function exportToPDF() {
+            window.print();
+        }
+       
+        // --- VIEW CREATION FUNCTIONS (Auditor, Dashboard, Admin) ---
+       
         function createLoadingView() {
-            const container = createElement('div', 'flex justify-center items-center h-96');
+            const container = createElement('div', 'flex flex-col justify-center items-center h-96');
             const spinner = createElement('div', 'animate-spin rounded-full h-12 w-12 border-b-2 border-indigo-500');
-            const text = createElement('p', 'ml-4 text-lg text-gray-600', 'Loading Application Data...');
+            const text = createElement('p', 'mt-4 text-lg text-gray-600', 'Authenticating and loading real-time data...');
             container.append(spinner, text);
             return container;
         }
 
         function createRiskDashboardView(data) {
+            // (Dashboard content implementation - same as previous version)
             const container = createElement('div', 'space-y-6');
             container.appendChild(createElement('h2', 'text-3xl font-extrabold text-gray-900 border-b pb-2', 'OT Risk Dashboard'));
            
             // Key Metrics Cards
+            const criticalCount = data.risks.filter(r => r.severity === 'Critical').length;
             const cardsData = [
                 { title: "Total Assets", value: data.assets.length, icon: 'cpu', color: "text-indigo-500", bg: "bg-indigo-50" },
-                { title: "Critical Risks", value: data.risks.filter(r => r.severity === 'Critical').length, icon: 'shield', color: "text-red-500", bg: "bg-red-50" },
+                { title: "Critical Risks", value: criticalCount, icon: 'shield', color: criticalCount > 0 ? "text-red-500" : "text-green-500", bg: criticalCount > 0 ? "bg-red-50" : "bg-green-50" },
                 { title: "Controls Deployed", value: data.controls.filter(c => c.status === 'Deployed').length, icon: 'check-circle', color: "text-green-500", bg: "bg-green-50" },
             ];
 
@@ -191,7 +200,7 @@
             // Risk Breakdown Table
             container.appendChild(createElement('h3', 'text-2xl font-semibold text-gray-800 pt-4', 'Top 5 Outstanding Risks'));
            
-            const tableContainer = createElement('div', 'bg-white rounded-xl shadow-lg overflow-x-auto table-responsive');
+            const tableContainer = createElement('div', 'bg-white rounded-xl shadow-lg overflow-x-auto table-responsive border');
             const table = createElement('table', 'min-w-full divide-y divide-gray-200');
             const thead = createElement('thead', 'bg-gray-50');
             const trHead = createElement('tr');
@@ -202,13 +211,14 @@
             table.appendChild(thead);
 
             const tbody = createElement('tbody', 'bg-white divide-y divide-gray-200');
-            data.risks.slice(0, 5).forEach(risk => {
+            data.risks.sort((a, b) => {
+                const severityOrder = { 'Critical': 1, 'High': 2, 'Medium': 3, 'Low': 4 };
+                return severityOrder[a.severity] - severityOrder[b.severity];
+            }).slice(0, 5).forEach(risk => {
                 const trBody = createElement('tr', 'hover:bg-gray-50 transition-colors');
                 const assetName = data.assets.find(a => a.id === risk.assetId)?.name || 'N/A';
                
-                const severityClass = risk.severity === 'Critical' ? 'bg-red-100 text-red-800' :
-                                      risk.severity === 'High' ? 'bg-yellow-100 text-yellow-800' :
-                                      'bg-blue-100 text-blue-800';
+                const severityClass = getSeverityClass(risk.severity);
 
                 trBody.appendChild(createElement('td', 'px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900', risk.id.substring(0, 8)));
                 trBody.appendChild(createElement('td', 'px-6 py-4 text-sm text-gray-500', risk.description));
@@ -230,18 +240,143 @@
             return container;
         }
 
+        function createAuditorReportView(data) {
+            // (Auditor Report content implementation - same as previous version, including CSV/PDF)
+            const container = createElement('div', 'space-y-6');
+            container.appendChild(createElement('h2', 'text-3xl font-extrabold text-gray-900 border-b pb-2 flex items-center', [
+                getIcon('file-text', 'w-7 h-7 mr-2 text-indigo-600'),
+                createElement('span', '', 'Auditor Risk Summary Report')
+            ]));
+
+            // --- Aggregation Logic ---
+            const riskCounts = data.risks.reduce((acc, risk) => {
+                acc.severity[risk.severity] = (acc.severity[risk.severity] || 0) + 1;
+                acc.status[risk.status] = (acc.status[risk.status] || 0) + 1;
+                return acc;
+            }, { severity: {}, status: {} });
+           
+            const totalRisks = data.risks.length;
+            const severityKeys = ['Critical', 'High', 'Medium', 'Low'];
+            const statusKeys = ['Open', 'In Progress', 'Closed', 'False Positive'];
+
+            // --- Export Controls ---
+            const exportDiv = createElement('div', 'flex space-x-4 print-hide');
+           
+            const csvBtn = createElement('button', 'flex items-center px-4 py-2 bg-green-500 text-white font-semibold rounded-lg shadow-md hover:bg-green-600 transition-all');
+            csvBtn.append(getIcon('file-text', 'w-5 h-5 mr-2'), document.createTextNode('Download Risk CSV'));
+            csvBtn.addEventListener('click', () => {
+                const columns = [
+                    { header: 'ID', field: 'id' },
+                    { header: 'Description', field: 'description' },
+                    { header: 'Asset ID', field: 'assetId' },
+                    { header: 'Severity', field: 'severity' },
+                    { header: 'Status', field: 'status' },
+                ];
+                exportToCSV('OT_Guardian_Risk_Report.csv', data.risks, columns);
+            });
+            exportDiv.appendChild(csvBtn);
+           
+            const pdfBtn = createElement('button', 'flex items-center px-4 py-2 bg-red-500 text-white font-semibold rounded-lg shadow-md hover:bg-red-600 transition-all');
+            pdfBtn.append(getIcon('printer', 'w-5 h-5 mr-2'), document.createTextNode('Export PDF (Print)'));
+            pdfBtn.addEventListener('click', exportToPDF);
+            exportDiv.appendChild(pdfBtn);
+
+            container.appendChild(exportDiv);
+
+
+            // --- Summary Aggregation Tables ---
+           
+            // 1. Severity Summary
+            container.appendChild(createElement('h3', 'text-2xl font-semibold text-gray-800 pt-6 pb-2', '1. Risk Severity Breakdown'));
+           
+            const severityTableContainer = createElement('div', 'bg-white rounded-xl shadow-lg overflow-x-auto table-responsive border');
+            const severityTable = createElement('table', 'min-w-full divide-y divide-gray-200');
+           
+            severityTable.innerHTML = `
+                <thead class="bg-gray-50">
+                    <tr>
+                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Severity Level</th>
+                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Count</th>
+                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Percentage</th>
+                    </tr>
+                </thead>
+                <tbody class="bg-white divide-y divide-gray-200">
+                    ${severityKeys.map(key => {
+                        const count = riskCounts.severity[key] || 0;
+                        const percentage = totalRisks > 0 ? ((count / totalRisks) * 100).toFixed(1) : 0;
+                        const severityClass = getSeverityClass(key);
+                        return `
+                            <tr>
+                                <td class="px-6 py-4 whitespace-nowrap text-sm font-medium">
+                                    <span class="px-2 inline-flex text-sm leading-5 font-semibold rounded-full ${severityClass}">${key}</span>
+                                </td>
+                                <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-900 font-bold">${count}</td>
+                                <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">${percentage}%</td>
+                            </tr>
+                        `;
+                    }).join('')}
+                    <tr>
+                        <td class="px-6 py-4 text-lg font-extrabold text-gray-900">TOTAL</td>
+                        <td class="px-6 py-4 text-lg font-extrabold text-gray-900">${totalRisks}</td>
+                        <td class="px-6 py-4 text-lg font-extrabold text-gray-900">100.0%</td>
+                    </tr>
+                </tbody>
+            `;
+            severityTableContainer.appendChild(severityTable);
+            container.appendChild(severityTableContainer);
+
+
+            // 2. Status Summary
+            container.appendChild(createElement('h3', 'text-2xl font-semibold text-gray-800 pt-6 pb-2', '2. Risk Status Summary'));
+           
+            const statusTableContainer = createElement('div', 'bg-white rounded-xl shadow-lg overflow-x-auto table-responsive border');
+            const statusTable = createElement('table', 'min-w-full divide-y divide-gray-200');
+           
+            statusTable.innerHTML = `
+                <thead class="bg-gray-50">
+                    <tr>
+                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Status</th>
+                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Count</th>
+                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Resolution %</th>
+                    </tr>
+                </thead>
+                <tbody class="bg-white divide-y divide-gray-200">
+                    ${statusKeys.map(key => {
+                        const count = riskCounts.status[key] || 0;
+                        const resolutionRate = key === 'Closed' ? (count / totalRisks) * 100 : 0;
+                        const statusClass = key === 'Closed' ? 'bg-green-100 text-green-800' :
+                                            key === 'Open' ? 'bg-red-100 text-red-800' : 'bg-blue-100 text-blue-800';
+                        return `
+                            <tr>
+                                <td class="px-6 py-4 whitespace-nowrap text-sm font-medium">
+                                    <span class="px-2 inline-flex text-sm leading-5 font-semibold rounded-full ${statusClass}">${key}</span>
+                                </td>
+                                <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-900 font-bold">${count}</td>
+                                <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">${resolutionRate > 0 ? resolutionRate.toFixed(1) + '%' : 'N/A'}</td>
+                            </tr>
+                        `;
+                    }).join('')}
+                </tbody>
+            `;
+            statusTableContainer.appendChild(statusTable);
+            container.appendChild(statusTableContainer);
+           
+            return container;
+        }
+
         function createAdminView() {
+            // (Admin view implementation - same as previous version)
             const { userId, userRole, isFirebaseReady } = appState;
            
             const mockUsers = [
-                { id: 1, email: 'faysalhasan2001@yahoo.com', role: 'Engineer', lastLogin: '2025-11-28' },
-                { id: 2, email: 'auditor@otg.com', role: 'Auditor', lastLogin: '2025-11-27' },
-                { id: 3, email: 'CYBERMELB@GMAIL.COM', role: 'Admin', lastLogin: '2025-11-29' },
+                { id: 1, email: 'cybermel@gmail.com', role: 'Admin (Mock)', lastLogin: '2025-11-28' },
+                { id: 2, email: 'faysalhasn2001@yahoo.com', role: 'Engineer (Mock)', lastLogin: '2025-11-27' },
+                { id: 3, email: 'auditor@otg.com', role: 'Auditor (Mock)', lastLogin: '2025-11-29' },
             ];
 
             let userEmail = 'N/A (Anonymous/Uninitialized)';
             if (isFirebaseReady && appState.auth && appState.auth.currentUser) {
-                userEmail = appState.auth.currentUser.email || appState.auth.currentUser.uid;
+                userEmail = appState.auth.currentUser.email || 'Anonymous';
             }
 
             const currentUserInfo = {
@@ -252,7 +387,7 @@
                 isCurrent: true
             };
 
-            const allUsers = [currentUserInfo, ...mockUsers.filter(u => u.email !== currentUserInfo.email)];
+            const allUsers = [currentUserInfo, ...mockUsers.filter(u => u.email !== currentUserInfo.email && u.email !== userEmail)];
 
             const container = createElement('div', 'space-y-6');
             container.appendChild(createElement('h2', 'text-3xl font-extrabold text-gray-900 border-b pb-2 flex items-center', [
@@ -262,13 +397,13 @@
            
             const statusBox = createElement('div', 'bg-indigo-50 border-l-4 border-indigo-400 text-indigo-700 p-4 rounded-xl shadow-md');
             statusBox.appendChild(createElement('p', 'font-bold', 'Your Current Role Status:'));
-            statusBox.appendChild(createElement('p', 'text-sm', `User ID: ` + `<span class="font-mono bg-indigo-100 p-1 rounded text-xs">${userId}</span>`));
+            statusBox.appendChild(createElement('p', 'text-sm', `User ID (UID): ` + `<span class="font-mono bg-indigo-100 p-1 rounded text-xs">${userId || 'N/A'}</span>`));
             statusBox.appendChild(createElement('p', 'text-sm', `Authenticated Role (from token claims): ` + `<span class="font-bold text-lg text-indigo-900">${userRole}</span>`));
             container.appendChild(statusBox);
 
             container.appendChild(createElement('h3', 'text-2xl font-semibold text-gray-800 pt-4', 'Mock User Management (Demonstration)'));
 
-            const tableContainer = createElement('div', 'bg-white rounded-xl shadow-lg overflow-x-auto table-responsive');
+            const tableContainer = createElement('div', 'bg-white rounded-xl shadow-lg overflow-x-auto table-responsive border');
             const table = createElement('table', 'min-w-full divide-y divide-gray-200');
            
             // Table Head
@@ -285,8 +420,8 @@
             allUsers.forEach(user => {
                 const trBody = createElement('tr', `${user.isCurrent ? 'bg-indigo-50 font-bold' : 'hover:bg-gray-50'} transition-colors`);
                
-                const roleClass = user.role === 'Admin' ? 'bg-red-100 text-red-800' :
-                                  user.role === 'Engineer' ? 'bg-green-100 text-green-800' :
+                const roleClass = user.role.includes('Admin') ? 'bg-red-100 text-red-800' :
+                                  user.role.includes('Engineer') ? 'bg-green-100 text-green-800' :
                                   'bg-blue-100 text-blue-800';
 
                 trBody.appendChild(createElement('td', 'px-6 py-4 whitespace-nowrap text-sm text-gray-900', user.email));
@@ -311,30 +446,31 @@
             return container;
         }
 
-        // Placeholder Views
         function createPlaceholderView(title, roleRequired) {
-            const container = createElement('div', 'p-6 bg-white rounded-xl shadow-lg');
-            container.appendChild(createElement('h2', 'text-2xl font-bold', title));
-            container.appendChild(createElement('p', 'text-gray-600 mt-2', `Manage this feature here. (Requires: ${roleRequired})`));
+            const container = createElement('div', 'p-6 bg-gray-50 rounded-xl shadow-inner');
+            container.appendChild(createElement('h2', 'text-2xl font-bold text-gray-800', title));
+            container.appendChild(createElement('p', 'text-indigo-600 mt-2 font-medium', `[Feature Development Required] - Full CRUD functionality for this section needs to be implemented.`));
+            container.appendChild(createElement('p', 'text-gray-600 mt-1', `Access: ${roleRequired}`));
             return container;
         }
-
 
         // --- MAIN RENDER LOOP ---
 
         function render() {
             const root = document.getElementById('root');
-            root.innerHTML = ''; // Clear existing content
+            if (!root) return; // Guard clause in case DOM is not ready
+            root.innerHTML = '';
 
             const container = createElement('div', 'min-h-screen bg-gray-100 print-full');
             const maxWDiv = createElement('div', 'max-w-7xl mx-auto');
             container.appendChild(maxWDiv);
 
-            // --- 1. Message Box Area ---
+            // 1. Message Box Area
             const msgArea = createElement('div', 'p-4 pt-8 print-hide');
-           
-            const message = appState.error || (appState.isFirebaseReady && appState.isAuthenticated ? `Welcome, User ID: ${appState.userId}. Current Role: ${appState.userRole}` : "Connecting/Initializing...");
-            const type = appState.error ? 'error' : 'info';
+            const message = appState.error || (appState.isFirebaseReady && appState.isAuthenticated ?
+                `Welcome, User ID: ${appState.userId.substring(0, 8)}... Current Role: ${appState.userRole}` :
+                "Connecting/Authenticating...");
+            const type = appState.error ? 'error' : (appState.isAuthenticated ? 'success' : 'info');
            
             msgArea.appendChild(createMessageBox(type, message, () => {
                 appState.error = null;
@@ -342,9 +478,8 @@
             }));
             maxWDiv.appendChild(msgArea);
 
-            // --- 2. Header ---
+            // 2. Header
             const header = createElement('header', 'flex justify-between items-center p-4 bg-white shadow-md rounded-b-xl print-hide');
-           
             const logo = createElement('div', 'flex items-center');
             logo.appendChild(getIcon('shield', 'w-8 h-8 text-indigo-600 mr-3'));
             logo.appendChild(createElement('h1', 'text-2xl font-bold text-gray-900', 'OT Guardian <span class="text-indigo-600">Demo</span>'));
@@ -364,7 +499,7 @@
             header.appendChild(userControls);
             maxWDiv.appendChild(header);
 
-            // --- 3. Navigation Bar ---
+            // 3. Navigation Bar
             const nav = createElement('nav', 'flex space-x-1 p-3 border-b bg-white shadow-inner rounded-xl mt-4 mx-4 overflow-x-auto whitespace-nowrap print-hide');
            
             const navItems = [
@@ -372,14 +507,15 @@
                 { view: 'assetBuilder', label: 'Assets', icon: 'cpu', roles: ['Engineer', 'Admin'] },
                 { view: 'securityControls', label: 'Controls', icon: 'check-circle', roles: ['Engineer', 'Auditor', 'Admin'] },
                 { view: 'remediationTasks', label: 'Remediation', icon: 'hard-hat', roles: ['Engineer', 'Admin'] },
+                { view: 'auditorReport', label: 'Auditor Report', icon: 'file-text', roles: ['Auditor', 'Admin'] },
                 { view: 'admin', label: 'Admin', icon: 'users', roles: ['Admin'] },
             ];
 
             navItems.forEach(item => {
-                if (!item.roles.includes(appState.userRole)) return; // Role-based visibility check
+                if (!item.roles.includes(appState.userRole)) return;
 
                 const btn = createElement('button', `flex items-center px-3 py-2 text-sm font-semibold rounded-lg transition-all duration-150`);
-                btn.classList.add(appState.currentView === item.view ? 'bg-indigo-700' 'text-white' 'shadow-md' : 'text-gray-700' 'hover:bg-indigo-100');
+                btn.classList.add(appState.currentView === item.view ? 'bg-indigo-700', 'text-white', 'shadow-md' : 'text-gray-700', 'hover:bg-indigo-100');
                
                 const icon = getIcon(item.icon, 'w-4 h-4 mr-2');
                 const label = document.createTextNode(item.label);
@@ -393,7 +529,7 @@
             });
             maxWDiv.appendChild(nav);
 
-            // --- 4. Deployment Status Bar ---
+            // 4. Deployment Status Bar
             const statusClass = appState.deploymentStatus.status === 'Online' ? 'bg-green-100 text-green-800' :
                                 appState.deploymentStatus.status === 'Warning' ? 'bg-yellow-100 text-yellow-800' :
                                 'bg-red-100 text-red-800';
@@ -406,7 +542,7 @@
             maxWDiv.appendChild(statusBar);
 
 
-            // --- 5. Main Content Area ---
+            // 5. Main Content Area
             const main = createElement('main', 'p-4 sm:p-6');
             const contentBox = createElement('div', 'bg-white p-6 rounded-xl shadow-2xl');
             main.appendChild(contentBox);
@@ -416,39 +552,29 @@
             if (!appState.isAuthReady) {
                 contentElement = createLoadingView();
             } else if (!appState.isFirebaseReady) {
-                // Mock Mode View
-                const mockModeContainer = createElement('div', 'text-center');
-                mockModeContainer.appendChild(createElement('h2', 'text-3xl font-bold text-red-600 mb-4', 'MOCK DATA MODE'));
-                mockModeContainer.appendChild(createElement('p', 'text-xl text-gray-700 mb-8', 'Data persistence is disabled. Fix the configuration to enable live data.'));
-                mockModeContainer.appendChild(createRiskDashboardView(appState.mockData));
+                // Mock Mode View Fallback
+                const mockModeContainer = createElement('div', 'text-center p-12');
+                mockModeContainer.appendChild(createElement('h2', 'text-3xl font-bold text-red-600 mb-4', 'MOCK DATA MODE (OFFLINE)'));
+                mockModeContainer.appendChild(createElement('p', 'text-xl text-gray-700 mb-8', 'Authentication failed or Firebase connection is offline. Displaying static data.'));
                 contentElement = mockModeContainer;
             } else {
-                // Live View (Role and View based)
-                const currentData = appState.data.assets.length > 0 ? appState.data : appState.mockData; // Use live data if available, otherwise mock
+                const currentData = appState.data.risks.length > 0 ? appState.data : appState.mockData;
 
                 switch (appState.currentView) {
                     case 'riskDashboard':
                         contentElement = createRiskDashboardView(currentData);
                         break;
                     case 'assetBuilder':
-                        if (appState.userRole === 'Engineer' || appState.userRole === 'Admin') {
-                            contentElement = createPlaceholderView('Asset Builder', 'Engineer/Admin');
-                        } else {
-                            contentElement = createElement('div', 'p-6 text-red-500 font-bold', 'Access Denied: Requires Engineer or Admin role.');
-                        }
-                        break;
                     case 'securityControls':
-                        if (appState.userRole === 'Engineer' || appState.userRole === 'Auditor' || appState.userRole === 'Admin') {
-                            contentElement = createPlaceholderView('Security Controls', 'Engineer/Auditor/Admin');
-                        } else {
-                            contentElement = createElement('div', 'p-6 text-red-500 font-bold', 'Access Denied: Requires Engineer, Auditor, or Admin role.');
-                        }
-                        break;
                     case 'remediationTasks':
-                        if (appState.userRole === 'Engineer' || appState.userRole === 'Admin') {
-                            contentElement = createPlaceholderView('Remediation Tasks', 'Engineer/Admin');
+                        const requiredRole = appState.currentView === 'securityControls' ? 'Engineer/Auditor/Admin' : 'Engineer/Admin';
+                        contentElement = createPlaceholderView(appState.currentView.split(/(?=[A-Z])/).map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' '), requiredRole);
+                        break;
+                    case 'auditorReport':
+                        if (appState.userRole === 'Auditor' || appState.userRole === 'Admin') {
+                            contentElement = createAuditorReportView(currentData);
                         } else {
-                            contentElement = createElement('div', 'p-6 text-red-500 font-bold', 'Access Denied: Requires Engineer or Admin role.');
+                            contentElement = createElement('div', 'p-6 text-red-500 font-bold', 'Access Denied: Requires Auditor or Admin role.');
                         }
                         break;
                     case 'admin':
@@ -467,9 +593,7 @@
             maxWDiv.appendChild(main);
             root.appendChild(container);
 
-            // Feather icons replacement (using lucide icons in this version)
-            // This ensures the SVG icons render correctly after DOM manipulation
-            lucide.createIcons();
+            window.lucide.createIcons();
         }
 
         // --- FIREBASE LOGIC ---
@@ -479,14 +603,14 @@
                 appState.isAuthenticated = true;
                 appState.userId = user.uid;
                
-                // CRITICAL: Force token refresh to read custom claims (role)
                 try {
+                    // Force token refresh to read custom claims (role)
                     const idTokenResult = await user.getIdTokenResult(true);
                     const role = idTokenResult.claims.role || 'Engineer';
                     appState.userRole = role;
-                    console.log("User Role set from token claims:", role);
+                    console.log(`User UID: ${user.uid} | Role set from token claims: ${role}`);
                 } catch (e) {
-                    console.error("Failed to get ID token result:", e);
+                    console.error("Failed to get ID token result, defaulting role:", e);
                     appState.userRole = 'Engineer';
                 }
             } else {
@@ -495,20 +619,17 @@
                 appState.userRole = 'Engineer';
             }
             appState.isAuthReady = true;
-            render(); // Rerender when auth state changes
+            render();
            
             if (appState.isFirebaseReady && appState.isAuthenticated && !appState.dataInitialized) {
-                // Initialize data listeners after authentication is complete
                 initializeDataListeners();
             }
         }
 
         async function initializeDataListeners() {
-            if (!appState.db || !appState.userId) return;
+            if (!appState.db || !appState.userId || appState.dataInitialized) return;
 
-            // Prevent multiple initializations
             appState.dataInitialized = true;
-
             const userIdPath = appState.userId;
 
             const collectionsToListen = [
@@ -523,7 +644,7 @@
                 const q = window.firebase.query(colRef);
                 window.firebase.onSnapshot(q, (snapshot) => {
                     appState.data[stateKey] = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-                    render(); // Rerender when data updates
+                    render();
                 }, (err) => {
                     console.error(`Error fetching ${stateKey}:`, err);
                     appState.error = `Failed to load ${stateKey} data. Check Firestore rules.`;
@@ -537,14 +658,13 @@
                 if (doc.exists()) {
                     appState.deploymentStatus = doc.data();
                 } else {
-                    const defaultStatus = { status: 'Online', lastCheck: window.firebase.serverTimestamp(), message: 'Initial deployment successful.' };
-                    window.firebase.setDoc(statusDocRef, defaultStatus).catch(e => console.error("Error setting default status:", e));
+                    const defaultStatus = { status: 'Warning', lastCheck: window.firebase.serverTimestamp(), message: 'Status document missing. Initializing...' };
+                    window.firebase.setDoc(statusDocRef, defaultStatus, { merge: true }).catch(e => console.error("Error setting default status:", e));
                     appState.deploymentStatus = defaultStatus;
                 }
                 render();
             }, (err) => {
                 console.error("Error fetching deployment status:", err);
-                appState.error = "Failed to load deployment status.";
                 render();
             });
         }
@@ -552,18 +672,19 @@
         async function signInUser() {
             if (!appState.auth) return;
             try {
+                // Determine which config/token to use
                 const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
+               
                 if (initialAuthToken) {
                     await window.firebase.signInWithCustomToken(appState.auth, initialAuthToken);
-                    console.log("Signed in with custom token.");
                 } else {
                     await window.firebase.signInAnonymously(appState.auth);
-                    console.log("Signed in anonymously.");
                 }
             } catch (e) {
                 console.error("Authentication Error:", e.message);
-                appState.error = "Authentication failed. Check deployment configuration.";
+                appState.error = "Authentication failed. App will run in mock mode.";
                 appState.isAuthReady = true;
+                appState.isFirebaseReady = false; // Force mock mode if auth fails
                 render();
             }
         }
@@ -583,37 +704,64 @@
             }
         }
 
-        // --- INITIALIZATION ---
+        // --- MOCK DATA (For display when persistence fails) ---
+        appState.mockData = {
+            assets: [
+                { id: 'a1', name: 'PLC-101 (MOCK)', location: 'Floor 1', type: 'Controller' },
+                { id: 'a2', name: 'HMI-203 (MOCK)', location: 'Control Room', type: 'Interface' },
+                { id: 'a3', name: 'Sensor Array 5 (MOCK)', location: 'Assembly Line', type: 'Sensor' }
+            ],
+            controls: [
+                { id: 'c1', name: 'Network Segmentation', status: 'Deployed' },
+                { id: 'c2', name: 'Endpoint Protection', status: 'Deployed' },
+                { id: 'c3', name: 'Patch Management', status: 'In Progress' }
+            ],
+            risks: [
+                { id: 'r1', description: 'Unpatched firmware on PLC-101', assetId: 'a1', severity: 'Critical', status: 'Open' },
+                { id: 'r2', description: 'Weak password policy on HMI-203', assetId: 'a2', severity: 'High', status: 'Open' },
+                { id: 'r3', description: 'Missing network baseline for Sensor Array 5', assetId: 'a3', severity: 'Medium', status: 'In Progress' },
+                { id: 'r4', description: 'Potential phishing vector', assetId: 'a3', severity: 'Low', status: 'Closed' },
+                { id: 'r5', description: 'Zero-day vulnerability in SCADA server', assetId: 'a1', severity: 'Critical', status: 'Open' },
+                { id: 'r6', description: 'Unused old port open on PLC-101', assetId: 'a1', severity: 'Medium', status: 'Closed' }
+            ],
+            tasks: []
+        };
+
+
+        // --- INITIALIZATION ENTRY POINT ---
         window.onload = function() {
-            initializeConfig();
-           
-            if (firebaseConfig) {
-                try {
-                    const app = window.firebase.initializeApp(firebaseConfig);
-                    appState.db = window.firebase.getFirestore(app);
-                    appState.auth = window.firebase.getAuth(app);
-                    window.firebase.setLogLevel('debug');
-                    appState.isFirebaseReady = true;
-
-                    // Set up auth listener before signing in
-                    window.firebase.onAuthStateChanged(appState.auth, updateAuthState);
-
-                    // Attempt initial sign-in
-                    signInUser();
-                } catch (e) {
-                    console.error("Fatal Firebase Init Error:", e);
-                    appState.error = "Fatal Firebase Initialization Error: Check console.";
-                    appState.isAuthReady = true;
-                }
-            } else {
-                // If no config, set auth ready and render mock mode immediately
+            // Check for Firebase availability (from the module script above)
+            if (typeof window.firebase === 'undefined' || !window.firebase.initializeApp) {
+                console.error("Firebase services failed to load from CDN. Check network connection.");
+                appState.error = "CRITICAL: Firebase services failed to load. Cannot connect to database.";
                 appState.isAuthReady = true;
+                render();
+                return;
             }
-           
-            render(); // Initial render (will show loading screen or mock mode)
+
+            try {
+                // Initialize using the hardcoded configuration
+                const app = window.firebase.initializeApp(MANUAL_FIREBASE_CONFIG);
+                appState.db = window.firebase.getFirestore(app);
+                appState.auth = window.firebase.getAuth(app);
+                window.firebase.setLogLevel('debug');
+                appState.isFirebaseReady = true;
+                appState.appId = MANUAL_FIREBASE_CONFIG.projectId;
+               
+                // Set up auth listener (this updates appState.isAuthReady and calls render/data listeners)
+                window.firebase.onAuthStateChanged(appState.auth, updateAuthState);
+
+                // Start the sign-in process
+                signInUser();
+
+            } catch (e) {
+                console.error("Fatal Firebase Initialization Error:", e);
+                appState.error = "Fatal Firebase Error: Check console for configuration details.";
+                appState.isAuthReady = true;
+                appState.isFirebaseReady = false;
+                render();
+            }
         };
     </script>
 </body>
 </html>
-
-

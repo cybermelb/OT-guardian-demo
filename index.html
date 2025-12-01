@@ -11,7 +11,7 @@
     <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
     <!-- Load Babel to process JSX -->
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
-   
+    
     <style>
         @media print {
             .print-hide { display: none !important; }
@@ -34,10 +34,9 @@
 <body class="bg-gray-100 min-h-screen font-sans">
     <div id="root"></div>
 
-    <!--
-        CRUCIAL FIX: Replacing dynamic 'await import()' with static module imports.
-        This loads Firebase immediately and exposes the required functions to the global 'window.firebase'
-        object, which is more robust against network restrictions than dynamic module loading.
+    <!-- 
+        Loads Firebase immediately and exposes the required functions to the global 'window.firebase' 
+        object for the subsequent Babel script to use.
     -->
     <script type="module">
         import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
@@ -74,17 +73,20 @@
         };
         console.log("Firebase module functions loaded and exposed to window.firebase");
     </script>
-   
+    
     <!-- The entire React application -->
     <script type="text/babel">
         const { useState, useEffect, useMemo } = React;
 
-        // --- INLINE SVG ICONS (Same as before) ---
+        // --- INLINE SVG ICONS (FIXED THE LOCK ICON) ---
         const Shield = (props) => (<svg {...props} xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path></svg>);
         const LogOut = (props) => (<svg {...props} xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"></path><polyline points="16 17 21 12 16 7"></polyline><line x1="21" y1="12" x2="9" y2="12"></line></svg>);
         const Loader = (props) => (<svg {...props} xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 12a9 9 0 1 1-6.219-8.56"></path></svg>);
         const Mail = (props) => (<svg {...props} xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="2" y="4" width="20" height="16" rx="2"></rect><path d="m22 7-8.97 5.7a1.94 1.94 0 0 1-2.06 0L2 7"></path></svg>);
-        const Lock = (props) => (<svg {...props} xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect><path d="M7 11V7a5 5 0 0 1 10 0v4"></path></rect><path d="M7 11V7a5 5 0 0 1 10 0v4"></path></svg>);
+        
+        // --- CORRECTED LOCK SVG ---
+        const Lock = (props) => (<svg {...props} xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect><path d="M7 11V7a5 5 0 0 1 10 0v4"></path></svg>);
+
         const Key = (props) => (<svg {...props} xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M2 18 16 4l3 3 7 7-3 3-3-3zM2 18l3-3 7 7-3 3zM16 4l-3 3-7 7 3-3z"></path><circle cx="16" cy="4" r="2"></circle><circle cx="5" cy="15" r="2"></circle></svg>);
         const UserPlus = (props) => (<svg {...props} xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><line x1="19" y1="8" x2="19" y2="14"/><line x1="22" y1="11" x2="16" y2="11"/></svg>);
         const AlertTriangle = (props) => (<svg {...props} xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12" y2="17"/></svg>);
@@ -108,11 +110,11 @@
                 {children}
             </div>
         );
-       
+        
         const Button = ({ children, onClick, variant = 'primary', className = '', disabled = false, type = 'button' }) => {
             let baseStyle = "px-4 py-2 font-semibold text-sm rounded-lg transition-all duration-200 shadow-md focus:outline-none focus:ring-2 focus:ring-offset-2";
             let variantStyle = '';
-           
+            
             switch (variant) {
                 case 'secondary':
                     variantStyle = 'bg-gray-200 text-gray-700 hover:bg-gray-300 focus:ring-gray-500';
@@ -126,7 +128,7 @@
                 default: // primary
                     variantStyle = 'bg-indigo-600 text-white hover:bg-indigo-700 focus:ring-indigo-500';
             }
-           
+            
             return (
                 <button
                     onClick={onClick}
@@ -138,7 +140,7 @@
                 </button>
             );
         };
-       
+        
         const InputField = ({ label, name, type = 'text', value, onChange, required = false, icon: Icon, placeholder = '' }) => (
             <div className="mb-4">
                 <label className="block text-sm font-medium text-gray-700 mb-1">{label}</label>
@@ -164,9 +166,9 @@
             const [isRegistering, setIsRegistering] = useState(false);
             const [email, setEmail] = useState('');
             const [password, setPassword] = useState('');
-            const [authError, setAuthError] = useState(null);
+            const [authError, setAuthError] = useState(null); 
             const [isLoading, setIsLoading] = useState(false);
-           
+            
             // Display the detailed initialization error if it exists
             if (initError) {
                 // If initError is a string, it means we hit a fatal error during setupFirebase.
@@ -185,7 +187,7 @@
                     </div>
                 );
             }
-           
+            
             // If Firebase modules were not loaded statically
             if (!isFirebaseLoaded()) {
                 return (
@@ -194,7 +196,7 @@
                             <AlertTriangle className="w-8 h-8 mx-auto text-red-500 mb-4" />
                             <h2 className="text-xl font-bold text-red-700 mb-2">SDK MODULE LOAD FAILURE</h2>
                             <p className="text-gray-600 text-sm mt-2">
-                                The Firebase module scripts failed to load statically. This usually indicates a network or Content Security Policy (CSP) restriction blocking
+                                The Firebase module scripts failed to load statically. This usually indicates a network or Content Security Policy (CSP) restriction blocking 
                                 access to <code className="font-mono text-black">https://www.gstatic.com</code>.
                             </p>
                         </Card>
@@ -205,7 +207,7 @@
             // If we made it past initialization, proceed with the login form
             const handleAuth = async (e) => {
                 e.preventDefault();
-                setAuthError(null);
+                setAuthError(null); 
                 setIsLoading(true);
                 const { getAuth, signInWithEmailAndPassword, createUserWithEmailAndPassword } = window.firebase;
 
@@ -223,7 +225,7 @@
                     if (err.code) {
                         if (err.code === 'auth/operation-not-allowed') {
                             // Specific fix for the user's reported error
-                            msg = `Operation Not Allowed (Code: auth/operation-not-allowed).
+                            msg = `Operation Not Allowed (Code: auth/operation-not-allowed). 
                                 PLEASE GO TO YOUR FIREBASE CONSOLE -> AUTHENTICATION -> SIGN-IN METHOD, and ensure the Email/Password provider is ENABLED.`;
                         } else {
                             // Clean up standard Firebase error codes
@@ -246,10 +248,10 @@
                         <h2 className="text-3xl font-bold text-center text-indigo-700 mb-6 flex items-center justify-center">
                             <Shield className="w-8 h-8 mr-2" /> OT Guardian Login
                         </h2>
-                       
+                        
                         {authError && (
                             <div className="mb-4 p-3 bg-red-100 border border-red-400 text-red-700 rounded-lg text-sm flex items-center">
-                                <AlertTriangle className="w-4 h-4 mr-2 flex-shrink-0" />
+                                <AlertTriangle className="w-4 h-4 mr-2 flex-shrink-0" /> 
                                 <span className="break-words whitespace-pre-wrap">{authError}</span>
                             </div>
                         )}
@@ -276,8 +278,8 @@
                                 icon={Lock}
                             />
 
-                            <Button
-                                type="submit"
+                            <Button 
+                                type="submit" 
                                 className="w-full mt-6 flex items-center justify-center"
                                 disabled={isLoading || !email || password.length < 6}
                             >
@@ -318,13 +320,13 @@
 
 
         // --- VIEW COMPONENTS (Same as before) ---
-       
+        
         const OverviewDashboard = ({ userId, risks, assets, deploymentStatus }) => {
             const totalAssets = assets.length;
             const highRiskCount = risks.filter(r => r.severity === 'High').length;
             const criticalAssets = assets.filter(a => a.criticality === 'High').length;
             const onlineStatus = deploymentStatus?.status === 'Online';
-           
+            
             const AssetSummaryTable = () => (
                 <div className="overflow-x-auto table-responsive custom-scrollbar">
                     <table className="min-w-full divide-y divide-gray-200">
@@ -361,7 +363,7 @@
             return (
                 <div className="space-y-6">
                     <h2 className="text-3xl font-extrabold text-gray-900">OT Security Overview</h2>
-                   
+                    
                     {/* Status Cards Grid */}
                     <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
                         <Card className="border-t-4 border-indigo-500">
@@ -391,12 +393,12 @@
                     <Card title="Latest Asset Registrations">
                         {totalAssets > 0 ? <AssetSummaryTable /> : <p className="text-gray-500">No assets registered yet.</p>}
                     </Card>
-                   
+                    
                     <p className="text-sm text-gray-500 italic">User ID: {userId}</p>
                 </div>
             );
         };
-       
+        
         const PlaceholderView = ({ title, icon: Icon }) => (
             <div className="flex flex-col items-center justify-center h-96 bg-white rounded-xl shadow-lg p-6">
                 <Icon className="w-16 h-16 text-indigo-400 mb-4" />
@@ -414,7 +416,7 @@
             const [risks, setRisks] = useState([]);
             const [assets, setAssets] = useState([]);
             const [deploymentStatus, setDeploymentStatus] = useState(null);
-           
+            
             // Firebase State
             const [fbApp, setFbApp] = useState(null); // Holds the initialized Firebase App instance
             const [initError, setInitError] = useState(null); // Holds initialization errors
@@ -443,9 +445,14 @@
                         if (cleanedConfig.startsWith('"') && cleanedConfig.endsWith('"')) {
                             cleanedConfig = cleanedConfig.substring(1, cleanedConfig.length - 1);
                         }
-                       
+                        
                         // 3. Final attempt to parse
-                        firebaseConfig = JSON.parse(cleanedConfig);
+                        // This uses a robust fallback in case of parsing errors
+                        try {
+                            firebaseConfig = JSON.parse(cleanedConfig);
+                        } catch (e) {
+                            throw new Error(`JSON.parse failed on cleaned config: ${e.message}`);
+                        }
 
                         if (!firebaseConfig || !firebaseConfig.apiKey) {
                             throw new Error(`Invalid Config: Parsed object is missing an 'apiKey' or is empty.`);
@@ -466,10 +473,10 @@ Raw Input (first 100 chars): ${rawConfig.substring(0, 100)}...`;
                         const auth = fb.getAuth(app);
                         const db = fb.getFirestore(app);
                         fb.setLogLevel('Debug');
-                       
+                        
                         setFbApp({ app, auth, db });
                         console.log("Firebase services initialized successfully.");
-                       
+                        
                         // 5. Setup Auth Listener
                         fb.onAuthStateChanged(auth, (user) => {
                             setAuthUser(user);
@@ -488,7 +495,7 @@ Raw Input (first 100 chars): ${rawConfig.substring(0, 100)}...`;
 
             const userId = authUser?.uid;
             const userEmail = authUser?.email || 'N/A';
-           
+            
             // Firestore Collection Ref Getter
             const getPublicCollectionRef = (collectionName) => {
                 const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
@@ -556,13 +563,13 @@ Raw Input (first 100 chars): ${rawConfig.substring(0, 100)}...`;
                     unsubscribeRisks();
                     unsubscribeStatus();
                 };
-            }, [userId, isAuthLoading, initError, fb, fbApp]);
+            }, [userId, isAuthLoading, initError, fb, fbApp]); 
 
             const checkAdminAccess = () => {
                 // Admin check based on email (cybermelb@gmail.com added for demo)
-                return userEmail === 'admin@otguardian.com' || userEmail === 'cybermelb@gmail.com';
+                return userEmail === 'admin@otguardian.com' || userEmail === 'cybermelb@gmail.com'; 
             };
-           
+            
             const renderView = () => {
                 if (isAuthLoading) {
                     // Show a specific error if init failed, otherwise show loading
@@ -570,33 +577,33 @@ Raw Input (first 100 chars): ${rawConfig.substring(0, 100)}...`;
                         // initError is guaranteed to be a string here due to checks in setupFirebase
                         return <AuthGate initError={initError} />;
                     }
-                   
+                    
                     if (!isFirebaseLoaded()) {
                          return <div className="text-center p-12 text-gray-500 flex flex-col items-center">
-                            <Loader className="w-8 h-8 animate-spin-slow text-red-500 mb-4" />
+                            <Loader className="w-8 h-8 animate-spin-slow text-red-500 mb-4" /> 
                             <p>Waiting for Static Firebase SDK Load...</p>
                             <p className="text-xs mt-2 text-red-500">If this persists, the CDN link is blocked.</p>
                         </div>;
                     }
 
                     return <div className="text-center p-12 text-gray-500 flex flex-col items-center">
-                        <Loader className="w-8 h-8 animate-spin-slow text-indigo-500 mb-4" />
+                        <Loader className="w-8 h-8 animate-spin-slow text-indigo-500 mb-4" /> 
                         <p>Authenticating User...</p>
                         <p className="text-xs mt-2">Connecting to OT Guardian Security services.</p>
                     </div>;
                 }
-               
+                
                 if (!userId) {
                     // Render AuthGate for sign-in
-                    return <AuthGate initError={initError} />;
+                    return <AuthGate initError={initError} />; 
                 }
-               
+                
                 // Content Views
                 switch (currentView) {
                     case 'overview':
                         return <OverviewDashboard userId={userId} risks={risks} assets={assets} deploymentStatus={deploymentStatus} />;
                     case 'assetBuilder':
-                        return <PlaceholderView title="Asset Builder" icon={Cpu} />;
+                        return <PlaceholderView title="Asset Builder" icon={Cpu} />; 
                     case 'riskDashboard':
                         return <PlaceholderView title="Risk Dashboard" icon={Shield} />;
                     case 'securityControls':
@@ -609,7 +616,7 @@ Raw Input (first 100 chars): ${rawConfig.substring(0, 100)}...`;
                         return <OverviewDashboard userId={userId} risks={risks} assets={assets} deploymentStatus={deploymentStatus} />;
                 }
             };
-           
+            
             const handleLogout = async () => {
                 if (fb && fbApp?.auth) {
                     try {
@@ -625,7 +632,7 @@ Raw Input (first 100 chars): ${rawConfig.substring(0, 100)}...`;
             return (
                 <div className="min-h-screen bg-gray-50 flex flex-col items-center">
                     <div className="w-full max-w-6xl bg-white shadow-xl rounded-xl mt-6 mb-6 print-full">
-                       
+                        
                         {/* Header */}
                         <header className="flex justify-between items-center p-4 border-b bg-indigo-800 text-white rounded-t-xl print-hide">
                             <h1 className="text-2xl font-bold flex items-center">
@@ -636,7 +643,7 @@ Raw Input (first 100 chars): ${rawConfig.substring(0, 100)}...`;
                                     <span className="text-sm font-medium opacity-80 hidden sm:inline">
                                         {userEmail}
                                     </span>
-                                    <button
+                                    <button 
                                         onClick={handleLogout}
                                         className='p-2 bg-indigo-700 hover:bg-indigo-600 rounded-full transition duration-150 shadow-md'
                                         aria-label="Log Out"
@@ -678,16 +685,16 @@ Raw Input (first 100 chars): ${rawConfig.substring(0, 100)}...`;
                                 })}
                             </nav>
                         )}
-                       
+                        
                         {/* Deployment Status Bar - Only show if authenticated */}
                         {userId && deploymentStatus && (
                             <div className={`p-3 text-sm font-semibold rounded-xl text-center shadow-inner mx-4 mt-4 print-hide ${
-                                deploymentStatus?.status === 'Online' ? 'bg-green-100 text-green-800' :
-                                deploymentStatus?.status === 'Warning' ? 'bg-yellow-100 text-yellow-800' :
+                                deploymentStatus?.status === 'Online' ? 'bg-green-100 text-green-800' : 
+                                deploymentStatus?.status === 'Warning' ? 'bg-yellow-100 text-yellow-800' : 
                                 'bg-red-100 text-red-800'
                             }`}>
                                 <Zap className="w-4 h-4 inline mr-1" />
-                                Deployment Status: {deploymentStatus?.status || 'Loading...'} |
+                                Deployment Status: {deploymentStatus?.status || 'Loading...'} | 
                                 Last Check: {deploymentStatus?.lastCheck?.seconds ? new Date(deploymentStatus.lastCheck.seconds * 1000).toLocaleString() : 'N/A'}
                             </div>
                         )}

@@ -3,10 +3,71 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>OT Guardian App (V3 - Finalized Deployment)</title>
+    <title>OT Guardian Deployment App (Enhanced)</title>
+    <!-- Load Tailwind CSS -->
     <script src="https://cdn.tailwindcss.com"></script>
-    
+    <!-- Load React, ReactDOM, and Babel -->
+    <script crossorigin src="https://unpkg.com/react@18/umd/react.development.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+   
+    <!-- Load Lucide Icons -->
     <script src="https://unpkg.com/lucide@latest"></script>
+
+    <!-- Load Firebase SDKs -->
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import {
+            getAuth,
+            signInAnonymously,
+            signInWithCustomToken,
+            onAuthStateChanged,
+            signOut
+        } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import {
+            getFirestore,
+            doc,
+            getDoc,
+            setDoc,
+            onSnapshot,
+            collection,
+            query,
+            where,
+            orderBy,
+            limit
+        } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+        import { setLogLevel } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+
+        // Global variables for Firebase access (must be used as defined)
+        window.__app_id = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
+        window.firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {};
+        window.__initial_auth_token = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
+       
+        // Initialize Firebase, Auth, and Firestore globally accessible to the React script
+        window.firebaseApp = initializeApp(window.firebaseConfig);
+        window.db = getFirestore(window.firebaseApp);
+        window.auth = getAuth(window.firebaseApp);
+       
+        // Set log level for debugging
+        setLogLevel('debug');
+       
+        // Expose necessary Firebase functions to the React scope
+        window.getAuth = getAuth;
+        window.signInAnonymously = signInAnonymously;
+        window.signInWithCustomToken = signInWithCustomToken;
+        window.onAuthStateChanged = onAuthStateChanged;
+        window.signOut = signOut;
+        window.doc = doc;
+        window.getDoc = getDoc;
+        window.setDoc = setDoc;
+        window.onSnapshot = onSnapshot;
+        window.collection = collection;
+        window.query = query;
+        window.where = where;
+        window.orderBy = orderBy;
+        window.limit = limit;
+        window.getFirestore = getFirestore;
+    </script>
 
     <style>
         @media print {
@@ -15,874 +76,514 @@
             body, .bg-gray-100 { background-color: white !important; }
             .table-responsive td, .table-responsive th { white-space: normal !important; }
         }
+        /* Custom scrollbar style for better aesthetics */
+        ::-webkit-scrollbar { width: 8px; }
+        ::-webkit-scrollbar-track { background: #f1f1f1; }
+        ::-webkit-scrollbar-thumb { background: #888; border-radius: 4px; }
+        ::-webkit-scrollbar-thumb:hover { background: #555; }
+        /* Font setup */
+        body { font-family: "Inter", sans-serif; }
     </style>
-
-    <script type="module">
-        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
-        import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged, signOut, signInWithEmailAndPassword } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
-        import { getFirestore, doc, setDoc, collection, query, onSnapshot, serverTimestamp, setLogLevel } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
-
-        // Expose Firebase services globally for the main Vanilla JS script
-        window.firebase = {
-            initializeApp, getAuth, signInAnonymously, signInWithCustomToken,
-            onAuthStateChanged, signOut, getFirestore, doc, setDoc,
-            collection, query, onSnapshot, serverTimestamp, setLogLevel,
-            signInWithEmailAndPassword // <-- NEW: Added for standard login
-        };
-    </script>
 </head>
-<body class="bg-gray-100 min-h-screen font-[Inter]">
-    <div id="root" class="min-h-screen"></div>
+<body class="bg-gray-50 min-h-screen">
+    <div id="root"></div>
 
-    <script>
-        // --- HARDCODED FIREBASE CONFIGURATION (User provided values) ---
-        const MANUAL_FIREBASE_CONFIG = {
-            apiKey: "AIzaSyAyDKqA-j9yjp4KeGPGR49Cr6_q_drxBVs",
-            authDomain: "otgaurdian.firebaseapp.com",
-            projectId: "otgaurdian",
-            storageBucket: "otgaurdian.firebasestorage.app",
-            messagingSenderId: "719542806938",
-            appId: "1:719542806938:web:ed9376fcc7d04851e47223",
-            measurementId: "G-9FMPGC5C93"
-        };
-        const DEFAULT_APP_ID = MANUAL_FIREBASE_CONFIG.projectId;
+    <script type="text/babel">
+        // --- React Setup ---
+        const { useState, useEffect, useCallback, useMemo } = React;
+        const { Users, TrendingUp, Cpu, Server, Lock, Zap, LogOut, Loader, Home, List, Database, Settings } = lucide;
 
-        // --- GLOBAL APP STATE ---
-        const appState = {
-            currentView: 'login', // <-- MODIFIED: Start at login screen
-            isAuthenticated: false,
-            isAuthReady: false,
-            isFirebaseReady: false,
-            userId: null,
-            userRole: 'Engineer',
-            data: { assets: [], controls: [], risks: [], tasks: [] },
-            deploymentStatus: { status: 'Unknown', message: 'Initializing...', lastCheck: null },
-            error: null,
-            db: null,
-            auth: null,
-            appId: DEFAULT_APP_ID,
-            dataInitialized: false
+        // Utility to convert Lucide components to SVG strings for use in non-JSX contexts (like map/menu data)
+        const Icon = ({ name, className = 'w-5 h-5' }) => {
+            const IconComponent = lucide[name];
+            return IconComponent ? <IconComponent className={className} /> : null;
         };
 
-        // --- HELPER FUNCTIONS ---
-        
-        function createElement(tag, classes = '', content = '') {
-            const el = document.createElement(tag);
-            if (classes) el.className = classes;
-            if (typeof content === 'string') {
-                el.innerHTML = content;
-            } else if (content instanceof Node) {
-                el.appendChild(content);
-            } else if (Array.isArray(content)) {
-                content.forEach(c => el.appendChild(c));
-            }
-            return el;
-        }
+        // --- Firestore Path Helpers ---
+        const getPublicCollectionRef = (collectionName) => {
+            return window.collection(window.db, 'artifacts', window.__app_id, 'public/data', collectionName);
+        };
+        const getPrivateCollectionRef = (userId, collectionName) => {
+            return window.collection(window.db, 'artifacts', window.__app_id, 'users', userId, collectionName);
+        };
+        const getDeploymentDocRef = (deploymentId) => {
+            return window.doc(window.db, 'artifacts', window.__app_id, 'public/data', 'deployments', deploymentId);
+        };
+        const getSystemStatusDocRef = () => {
+             return window.doc(window.db, 'artifacts', window.__app_id, 'public/data', 'system_status', 'main_status');
+        };
 
-        function getIcon(name, classes = 'w-5 h-5') {
-            const iconElement = document.createElement('i');
-            iconElement.className = classes;
-            iconElement.innerHTML = `<svg data-lucide="${name}" class="${classes}"></svg>`;
-            return iconElement;
-        }
+        // --- Core Components ---
 
-        function createMessageBox(type, message, onClose) {
-            if (!message) return createElement('div');
-            let colorClass, IconName;
-            switch (type) {
-                case 'success':
-                    colorClass = "bg-green-100 text-green-800 border border-green-300";
-                    IconName = 'check-circle';
-                    break;
-                case 'error':
-                    colorClass = "bg-red-100 text-red-800 border border-red-300";
-                    IconName = 'alert-triangle';
-                    break;
-                default:
-                    colorClass = "bg-blue-100 text-blue-800 border border-blue-300";
-                    IconName = 'info';
-            }
-            const box = createElement('div', `p-4 rounded-xl shadow-lg flex items-center mb-4 transition-all duration-300 ${colorClass}`);
-            box.appendChild(getIcon(IconName, 'w-5 h-5 mr-3 flex-shrink-0'));
-            box.appendChild(createElement('span', 'text-sm font-medium flex-grow', message));
-            if (onClose) {
-                const closeBtn = createElement('button', 'ml-4 text-gray-500 hover:text-gray-700');
-                closeBtn.appendChild(getIcon('x', 'w-4 h-4'));
-                closeBtn.addEventListener('click', onClose);
-                box.appendChild(closeBtn);
-            }
-            return box;
-        }
-        
-        function getSeverityClass(severity) {
-            switch (severity) {
-                case 'Critical': return 'bg-red-100 text-red-800 border-red-500';
-                case 'High': return 'bg-yellow-100 text-yellow-800 border-yellow-500';
-                case 'Medium': return 'bg-orange-100 text-orange-800 border-orange-500';
-                default: return 'bg-blue-100 text-blue-800 border-blue-500';
-            }
-        }
+        // 1. Dashboard View
+        const DashboardView = ({ userId, userRole, deploymentStatus }) => {
+            return (
+                <div className="space-y-8 print-full">
+                    <h1 className="text-4xl font-extrabold text-gray-800 border-b pb-2 mb-6">OT Guardian Dashboard</h1>
+                   
+                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+                        {/* Status Card 1 */}
+                        <div className="bg-white p-6 rounded-xl shadow-lg border-l-4 border-green-500">
+                            <Home className="w-8 h-8 text-green-500 mb-3" />
+                            <p className="text-sm font-medium text-gray-500">Total Assets Monitored</p>
+                            <p className="text-3xl font-bold text-gray-900">124</p>
+                        </div>
+                        {/* Status Card 2 */}
+                        <div className="bg-white p-6 rounded-xl shadow-lg border-l-4 border-blue-500">
+                            <TrendingUp className="w-8 h-8 text-blue-500 mb-3" />
+                            <p className="text-sm font-medium text-gray-500">Active Deployments</p>
+                            <p className="text-3xl font-bold text-gray-900">14</p>
+                        </div>
+                        {/* Status Card 3 */}
+                        <div className="bg-white p-6 rounded-xl shadow-lg border-l-4 border-yellow-500">
+                            <Zap className="w-8 h-8 text-yellow-500 mb-3" />
+                            <p className="text-sm font-medium text-gray-500">Pending Actions</p>
+                            <p className="text-3xl font-bold text-gray-900">3</p>
+                        </div>
+                        {/* Status Card 4 */}
+                        <div className="bg-white p-6 rounded-xl shadow-lg border-l-4 border-red-500">
+                            <Server className="w-8 h-8 text-red-500 mb-3" />
+                            <p className="text-sm font-medium text-gray-500">Critical Alerts (24h)</p>
+                            <p className="text-3xl font-bold text-gray-900">1</p>
+                        </div>
+                    </div>
 
-        // --- EXPORT FUNCTIONS (CSV/PDF) ---
-        // (functions remain the same)
-        function exportToCSV(filename, data, columns) {
-            if (data.length === 0) {
-                console.error("No data to export!");
-                return;
-            }
-            const header = columns.map(col => `"${col.header}"`).join(',');
-            const rows = data.map(row => {
-                return columns.map(col => {
-                    const value = row[col.field] !== undefined && row[col.field] !== null ? String(row[col.field]).replace(/"/g, '""') : '';
-                    return `"${value}"`;
-                }).join(',');
-            }).join('\n');
-            const csvContent = header + '\n' + rows;
-            const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
-            const link = document.createElement("a");
-            if (link.download !== undefined) {
-                const url = URL.createObjectURL(blob);
-                link.setAttribute("href", url);
-                link.setAttribute("download", filename);
-                link.style.visibility = 'hidden';
-                document.body.appendChild(link);
-                link.click();
-                document.body.removeChild(link);
-            } else {
-                console.warn("Your browser does not support CSV download.");
-            }
-        }
-        
-        function exportToPDF() {
-            window.print();
-        }
-        
-        // --- VIEW CREATION FUNCTIONS (Auditor, Dashboard, Admin) ---
-        
-        function createLoadingView() {
-            const container = createElement('div', 'flex flex-col justify-center items-center h-96');
-            const spinner = createElement('div', 'animate-spin rounded-full h-12 w-12 border-b-2 border-indigo-500');
-            const text = createElement('p', 'mt-4 text-lg text-gray-600', 'Authenticating and loading real-time data...');
-            container.append(spinner, text);
-            return container;
-        }
+                    {/* Deployment Status Detail */}
+                    <section className="bg-white p-6 rounded-xl shadow-lg">
+                        <h2 className="text-xl font-semibold text-gray-800 mb-4 flex items-center">
+                            <Cpu className="w-5 h-5 mr-2 text-indigo-600" />
+                            OT Guardian System Status
+                        </h2>
+                        <div className="grid grid-cols-1 md:grid-cols-3 gap-4 text-sm">
+                            <div className="flex items-center">
+                                <span className={`w-3 h-3 rounded-full mr-2 ${deploymentStatus?.status === 'Online' ? 'bg-green-500' : 'bg-red-500'}`}></span>
+                                <span className="font-medium">Overall Health:</span>
+                                <span className={`ml-2 font-bold ${deploymentStatus?.status === 'Online' ? 'text-green-600' : 'text-red-600'}`}>
+                                    {deploymentStatus?.status || 'Unknown'}
+                                </span>
+                            </div>
+                            <div className="flex items-center">
+                                <span className="font-medium">Last Check:</span>
+                                <span className="ml-2 text-gray-600">
+                                    {deploymentStatus?.lastCheck?.seconds ? new Date(deploymentStatus.lastCheck.seconds * 1000).toLocaleString() : 'N/A'}
+                                </span>
+                            </div>
+                            <div className="flex items-center">
+                                <span className="font-medium">User Role Access:</span>
+                                <span className="ml-2 font-mono text-xs p-1 bg-indigo-100 text-indigo-800 rounded">{userRole}</span>
+                            </div>
+                        </div>
+                    </section>
+                </div>
+            );
+        };
 
-        // <-- NEW FUNCTION: Login View -->
-        function createLoginView() {
-            const container = createElement('div', 'max-w-md mx-auto p-8 bg-white rounded-xl shadow-2xl space-y-6 border border-indigo-200');
-            container.appendChild(createElement('h2', 'text-3xl font-bold text-center text-gray-900', 'OT Guardian Login'));
-            container.appendChild(createElement('p', 'text-center text-sm text-gray-500', 'Sign in with your Admin or Engineer credentials.'));
+        // 2. Report View (Placeholder)
+        const ReportsView = () => {
+            return (
+                <div className="p-6 bg-white rounded-xl shadow-lg min-h-[500px]">
+                    <h1 className="text-3xl font-bold text-gray-800 mb-6 border-b pb-2">Deployment Reports</h1>
+                    <div className="text-center py-20 bg-gray-50 rounded-lg border-2 border-dashed border-gray-300">
+                        <List className="w-12 h-12 text-gray-400 mx-auto mb-4" />
+                        <p className="text-xl font-semibold text-gray-600">Reporting Engine Not Activated</p>
+                        <p className="text-gray-500 mt-2">Generate and view detailed deployment summaries here.</p>
+                        <button
+                            className="mt-6 px-6 py-2 bg-indigo-600 text-white font-medium rounded-lg shadow hover:bg-indigo-700 transition duration-150"
+                            onClick={() => console.log('Simulating report generation...')}
+                        >
+                            Generate Latest Report
+                        </button>
+                    </div>
+                </div>
+            );
+        };
 
-            const form = createElement('form', 'space-y-4');
+        // 3. User & Settings View (Placeholder)
+        const SettingsView = ({ userId, userRole }) => {
+            return (
+                <div className="p-6 bg-white rounded-xl shadow-lg min-h-[500px]">
+                    <h1 className="text-3xl font-bold text-gray-800 mb-6 border-b pb-2">User & Application Settings</h1>
+                   
+                    <div className="space-y-4">
+                        <p className="text-lg font-semibold text-gray-700">Current User Details</p>
+                        <div className="p-4 bg-gray-50 rounded-lg border">
+                            <p className="text-sm"><span className="font-medium">User ID:</span> <span className="font-mono text-xs bg-gray-200 p-1 rounded-md break-all">{userId || 'N/A'}</span></p>
+                            <p className="text-sm mt-2"><span className="font-medium">User Role:</span> <span className="font-mono text-sm p-1 bg-blue-100 text-blue-800 rounded">{userRole}</span></p>
+                            <p className="text-sm mt-2 text-gray-500">Note: Data access is determined by the User Role.</p>
+                        </div>
 
-            const emailInput = createElement('input', 'w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-indigo-500 focus:border-indigo-500', '');
-            emailInput.type = 'email';
-            emailInput.placeholder = 'Email';
-            emailInput.id = 'login-email';
+                        <p className="text-lg font-semibold text-gray-700 pt-4">Configuration (Read-Only)</p>
+                        <div className="p-4 bg-gray-50 rounded-lg border text-sm text-gray-600">
+                            <p>Application ID: <span className="font-mono bg-gray-200 p-1 rounded-md">{window.__app_id}</span></p>
+                            <p className="mt-2">Firebase Status: Initialized</p>
+                        </div>
+                    </div>
+                </div>
+            );
+        };
 
-            const passwordInput = createElement('input', 'w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-indigo-500 focus:border-indigo-500', '');
-            passwordInput.type = 'password';
-            passwordInput.placeholder = 'Password';
-            passwordInput.id = 'login-password';
+        // 4. Login Screen
+        const LoginScreen = ({ handleLogin, handleDemoSignIn, isLoggingIn }) => {
+            const [username, setUsername] = useState('demo_engineer');
+            const [password, setPassword] = useState('password123'); // Mock password
 
-            const loginBtn = createElement('button', 'w-full flex justify-center items-center px-4 py-2 border border-transparent text-sm font-medium rounded-lg shadow-sm text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500', 'Sign In');
-            loginBtn.type = 'submit';
+            return (
+                <div className="min-h-screen flex items-center justify-center bg-gray-100 p-4">
+                    <div className="w-full max-w-md bg-white p-8 rounded-2xl shadow-2xl border border-gray-200">
+                        <div className="text-center mb-8">
+                            <Lock className="w-10 h-10 text-indigo-600 mx-auto mb-3" />
+                            <h1 className="text-3xl font-bold text-gray-900">OT Guardian Login</h1>
+                            <p className="text-gray-500 mt-2">Access your secure deployment platform.</p>
+                        </div>
+                       
+                        <form className="space-y-6" onSubmit={(e) => { e.preventDefault(); handleLogin(username, password); }}>
+                            <div>
+                                <label className="block text-sm font-medium text-gray-700 mb-1">Username (Mock)</label>
+                                <input
+                                    type="text"
+                                    value={username}
+                                    onChange={(e) => setUsername(e.target.value)}
+                                    required
+                                    className="w-full p-3 border border-gray-300 rounded-xl focus:ring-indigo-500 focus:border-indigo-500 transition duration-150"
+                                    placeholder="Enter username"
+                                    disabled={isLoggingIn}
+                                />
+                            </div>
+                            <div>
+                                <label className="block text-sm font-medium text-gray-700 mb-1">Password (Mock)</label>
+                                <input
+                                    type="password"
+                                    value={password}
+                                    onChange={(e) => setPassword(e.target.value)}
+                                    required
+                                    className="w-full p-3 border border-gray-300 rounded-xl focus:ring-indigo-500 focus:border-indigo-500 transition duration-150"
+                                    placeholder="Enter password"
+                                    disabled={isLoggingIn}
+                                />
+                            </div>
+                           
+                            {/* FIX: Ensure buttons are enabled unless explicitly logging in */}
+                            <button
+                                type="submit"
+                                className={`w-full py-3 px-4 rounded-xl font-semibold transition duration-150 shadow-md ${
+                                    isLoggingIn
+                                        ? 'bg-indigo-400 text-white cursor-not-allowed'
+                                        : 'bg-indigo-600 text-white hover:bg-indigo-700'
+                                }`}
+                                disabled={isLoggingIn}
+                            >
+                                {isLoggingIn ? <Icon name="Loader" className="w-5 h-5 inline mr-2 animate-spin" /> : <Icon name="LogIn" className="w-5 h-5 inline mr-2" />}
+                                Sign In (Mock)
+                            </button>
+                        </form>
 
-            form.append(emailInput, passwordInput, loginBtn);
-            
-            form.addEventListener('submit', (e) => {
-                e.preventDefault();
-                const email = document.getElementById('login-email').value;
-                const password = document.getElementById('login-password').value;
-                handleEmailPasswordSignIn(email, password);
-            });
+                        <div className="relative my-6">
+                            <div className="absolute inset-0 flex items-center">
+                                <div className="w-full border-t border-gray-300"></div>
+                            </div>
+                            <div className="relative flex justify-center text-sm">
+                                <span className="px-2 bg-white text-gray-500">OR</span>
+                            </div>
+                        </div>
+                       
+                        {/* FIX: The Demo User button is now functional and enabled */}
+                        <button
+                            onClick={handleDemoSignIn}
+                            className={`w-full py-3 px-4 rounded-xl font-semibold transition duration-150 border-2 border-gray-300 ${
+                                isLoggingIn
+                                    ? 'bg-gray-200 text-gray-500 cursor-not-allowed'
+                                    : 'bg-white text-gray-700 hover:bg-gray-100'
+                            }`}
+                            disabled={isLoggingIn}
+                        >
+                            Continue as Demo User (Read-Only)
+                        </button>
+                    </div>
+                </div>
+            );
+        };
 
-            container.appendChild(form);
-            container.appendChild(createElement('div', 'relative'));
-            container.appendChild(createElement('div', 'absolute inset-0 flex items-center', '<span class="w-full border-t border-gray-300"></span>'));
-            container.appendChild(createElement('div', 'relative flex justify-center text-sm', '<span class="px-2 bg-white text-gray-500">OR</span>'));
+        // --- Main Application Component ---
+        const App = () => {
+            const [userId, setUserId] = useState(null);
+            const [userRole, setUserRole] = useState(null); // engineer, analyst, demo
+            const [currentView, setCurrentView] = useState('Dashboard');
+            const [isAuthChecking, setIsAuthChecking] = useState(true); // Tracks initial Firebase auth check
+            const [isLoggingIn, setIsLoggingIn] = useState(false); // Tracks form submissions/demo sign-in
+            const [deploymentStatus, setDeploymentStatus] = useState(null);
 
+            // --- Authentication and Initialization ---
 
-            // Demon User Fallback (Read-Only)
-            const demonUserBtn = createElement('button', 'w-full flex justify-center items-center px-4 py-2 border border-transparent text-sm font-medium rounded-lg shadow-sm text-indigo-700 bg-indigo-100 hover:bg-indigo-200 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500', [getIcon('eye', 'w-4 h-4 mr-2'), document.createTextNode('Continue as Demon User (Read-Only)')]);
-            demonUserBtn.type = 'button';
-            demonUserBtn.addEventListener('click', signInAsDemonUser);
-            container.appendChild(demonUserBtn);
-
-            return container;
-        }
-
-        function createRiskDashboardView(data) {
-            // (Dashboard content implementation - same as previous version)
-            const container = createElement('div', 'space-y-6');
-            container.appendChild(createElement('h2', 'text-3xl font-extrabold text-gray-900 border-b pb-2', 'OT Risk Dashboard'));
-            
-            // Key Metrics Cards
-            const criticalCount = data.risks.filter(r => r.severity === 'Critical').length;
-            const cardsData = [
-                { title: "Total Assets", value: data.assets.length, icon: 'cpu', color: "text-indigo-500", bg: "bg-indigo-50" },
-                { title: "Critical Risks", value: criticalCount, icon: 'shield', color: criticalCount > 0 ? "text-red-500" : "text-green-500", bg: criticalCount > 0 ? "bg-red-50" : "bg-green-50" },
-                { title: "Controls Deployed", value: data.controls.filter(c => c.status === 'Deployed').length, icon: 'check-circle', color: "text-green-500", bg: "bg-green-50" },
-            ];
-
-            const cardsGrid = createElement('div', 'grid grid-cols-1 md:grid-cols-3 gap-6');
-            cardsData.forEach(card => {
-                const cardEl = createElement('div', `p-6 rounded-xl shadow-lg ${card.bg} border-l-4 border-indigo-400`);
-                const content = createElement('div', 'flex items-center');
-                content.appendChild(getIcon(card.icon, `w-8 h-8 ${card.color} mr-4`));
-                content.appendChild(createElement('div', '', [
-                    createElement('p', 'text-sm font-medium text-gray-500', card.title),
-                    createElement('p', 'text-3xl font-bold text-gray-900', card.value.toString())
-                ]));
-                cardEl.appendChild(content);
-                cardsGrid.appendChild(cardEl);
-            });
-            container.appendChild(cardsGrid);
-
-            // Risk Breakdown Table
-            container.appendChild(createElement('h3', 'text-2xl font-semibold text-gray-800 pt-4', 'Top 5 Outstanding Risks'));
-            
-            const tableContainer = createElement('div', 'bg-white rounded-xl shadow-lg overflow-x-auto table-responsive border');
-            const table = createElement('table', 'min-w-full divide-y divide-gray-200');
-            const thead = createElement('thead', 'bg-gray-50');
-            const trHead = createElement('tr');
-            ['Risk ID', 'Description', 'Asset', 'Severity', 'Status'].forEach(header => {
-                trHead.appendChild(createElement('th', 'px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider', header));
-            });
-            thead.appendChild(trHead);
-            table.appendChild(thead);
-
-            const tbody = createElement('tbody', 'bg-white divide-y divide-gray-200');
-            data.risks.sort((a, b) => {
-                const severityOrder = { 'Critical': 1, 'High': 2, 'Medium': 3, 'Low': 4 };
-                return severityOrder[a.severity] - severityOrder[b.severity];
-            }).slice(0, 5).forEach(risk => {
-                const trBody = createElement('tr', 'hover:bg-gray-50 transition-colors');
-                const assetName = data.assets.find(a => a.id === risk.assetId)?.name || 'N/A';
-                
-                const severityClass = getSeverityClass(risk.severity);
-
-                trBody.appendChild(createElement('td', 'px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900', risk.id.substring(0, 8)));
-                trBody.appendChild(createElement('td', 'px-6 py-4 text-sm text-gray-500', risk.description));
-                trBody.appendChild(createElement('td', 'px-6 py-4 whitespace-nowrap text-sm text-gray-500', assetName));
-                
-                const severityTd = createElement('td', 'px-6 py-4 whitespace-nowrap text-sm font-semibold');
-                severityTd.appendChild(createElement('span', `px-2 inline-flex text-xs leading-5 font-semibold rounded-full ${severityClass}`, risk.severity));
-                trBody.appendChild(severityTd);
-                
-                trBody.appendChild(createElement('td', 'px-6 py-4 whitespace-nowrap text-sm text-gray-500', risk.status));
-                
-                tbody.appendChild(trBody);
-            });
-
-            table.appendChild(tbody);
-            tableContainer.appendChild(table);
-            container.appendChild(tableContainer);
-
-            return container;
-        }
-
-        function createAuditorReportView(data) {
-            // (Auditor Report content implementation - same as previous version)
-            const container = createElement('div', 'space-y-6');
-            container.appendChild(createElement('h2', 'text-3xl font-extrabold text-gray-900 border-b pb-2 flex items-center', [
-                getIcon('file-text', 'w-7 h-7 mr-2 text-indigo-600'),
-                createElement('span', '', 'Auditor Risk Summary Report')
-            ]));
-
-            // --- Aggregation Logic ---
-            const riskCounts = data.risks.reduce((acc, risk) => {
-                acc.severity[risk.severity] = (acc.severity[risk.severity] || 0) + 1;
-                acc.status[risk.status] = (acc.status[risk.status] || 0) + 1;
-                return acc;
-            }, { severity: {}, status: {} });
-            
-            const totalRisks = data.risks.length;
-            const severityKeys = ['Critical', 'High', 'Medium', 'Low'];
-            const statusKeys = ['Open', 'In Progress', 'Closed', 'False Positive'];
-
-            // --- Export Controls ---
-            const exportDiv = createElement('div', 'flex space-x-4 print-hide');
-            
-            const csvBtn = createElement('button', 'flex items-center px-4 py-2 bg-green-500 text-white font-semibold rounded-lg shadow-md hover:bg-green-600 transition-all');
-            csvBtn.append(getIcon('file-text', 'w-5 h-5 mr-2'), document.createTextNode('Download Risk CSV'));
-            csvBtn.addEventListener('click', () => {
-                const columns = [
-                    { header: 'ID', field: 'id' },
-                    { header: 'Description', field: 'description' },
-                    { header: 'Asset ID', field: 'assetId' },
-                    { header: 'Severity', field: 'severity' },
-                    { header: 'Status', field: 'status' },
-                ];
-                exportToCSV('OT_Guardian_Risk_Report.csv', data.risks, columns);
-            });
-            exportDiv.appendChild(csvBtn);
-            
-            const pdfBtn = createElement('button', 'flex items-center px-4 py-2 bg-red-500 text-white font-semibold rounded-lg shadow-md hover:bg-red-600 transition-all');
-            pdfBtn.append(getIcon('printer', 'w-5 h-5 mr-2'), document.createTextNode('Export PDF (Print)'));
-            pdfBtn.addEventListener('click', exportToPDF);
-            exportDiv.appendChild(pdfBtn);
-
-            container.appendChild(exportDiv);
-
-            // --- Summary Aggregation Tables ---
-            
-            // 1. Severity Summary
-            container.appendChild(createElement('h3', 'text-2xl font-semibold text-gray-800 pt-6 pb-2', '1. Risk Severity Breakdown'));
-            
-            const severityTableContainer = createElement('div', 'bg-white rounded-xl shadow-lg overflow-x-auto table-responsive border');
-            const severityTable = createElement('table', 'min-w-full divide-y divide-gray-200');
-            
-            severityTable.innerHTML = `
-                <thead class="bg-gray-50">
-                    <tr>
-                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Severity Level</th>
-                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Count</th>
-                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Percentage</th>
-                    </tr>
-                </thead>
-                <tbody class="bg-white divide-y divide-gray-200">
-                    ${severityKeys.map(key => {
-                        const count = riskCounts.severity[key] || 0;
-                        const percentage = totalRisks > 0 ? ((count / totalRisks) * 100).toFixed(1) : 0;
-                        const severityClass = getSeverityClass(key);
-                        return `
-                            <tr>
-                                <td class="px-6 py-4 whitespace-nowrap text-sm font-medium">
-                                    <span class="px-2 inline-flex text-xs leading-5 font-semibold rounded-full ${severityClass}">${key}</span>
-                                </td>
-                                <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-900 font-bold">${count}</td>
-                                <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">${percentage}%</td>
-                            </tr>
-                        `;
-                    }).join('')}
-                    <tr>
-                        <td class="px-6 py-4 text-lg font-extrabold text-gray-900">TOTAL</td>
-                        <td class="px-6 py-4 text-lg font-extrabold text-gray-900">${totalRisks}</td>
-                        <td class="px-6 py-4 text-lg font-extrabold text-gray-900">100.0%</td>
-                    </tr>
-                </tbody>
-            `;
-            severityTableContainer.appendChild(severityTable);
-            container.appendChild(severityTableContainer);
-
-            // 2. Status Summary
-            container.appendChild(createElement('h3', 'text-2xl font-semibold text-gray-800 pt-6 pb-2', '2. Risk Status Summary'));
-            
-            const statusTableContainer = createElement('div', 'bg-white rounded-xl shadow-lg overflow-x-auto table-responsive border');
-            const statusTable = createElement('table', 'min-w-full divide-y divide-gray-200');
-            
-            statusTable.innerHTML = `
-                <thead class="bg-gray-50">
-                    <tr>
-                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Status</th>
-                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Count</th>
-                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Resolution %</th>
-                    </tr>
-                </thead>
-                <tbody class="bg-white divide-y divide-gray-200">
-                    ${statusKeys.map(key => {
-                        const count = riskCounts.status[key] || 0;
-                        const resolutionRate = key === 'Closed' ? (count / totalRisks) * 100 : 0;
-                        const statusClass = key === 'Closed' ? 'bg-green-100 text-green-800' :
-                                             key === 'Open' ? 'bg-red-100 text-red-800' : 'bg-blue-100 text-blue-800';
-                        return `
-                            <tr>
-                                <td class="px-6 py-4 whitespace-nowrap text-sm font-medium">
-                                    <span class="px-2 inline-flex text-xs leading-5 font-semibold rounded-full ${statusClass}">${key}</span>
-                                </td>
-                                <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-900 font-bold">${count}</td>
-                                <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">${resolutionRate > 0 ? resolutionRate.toFixed(1) + '%' : 'N/A'}</td>
-                            </tr>
-                        `;
-                    }).join('')}
-                </tbody>
-            `;
-            statusTableContainer.appendChild(statusTable);
-            container.appendChild(statusTableContainer);
-            
-            return container;
-        }
-
-        function createAdminView() {
-            // (Admin view implementation - same as previous version)
-            const { userId, userRole, isFirebaseReady } = appState;
-            
-            const mockUsers = [
-                { id: 1, email: 'cybermel@gmail.com', role: 'Admin (Mock)', lastLogin: '2025-11-28' },
-                { id: 2, email: 'faysalhasn2001@yahoo.com', role: 'Engineer (Mock)', lastLogin: '2025-11-27' },
-                { id: 3, email: 'auditor@otg.com', role: 'Auditor (Mock)', lastLogin: '2025-11-29' },
-            ];
-
-            let userEmail = 'N/A (Anonymous/Uninitialized)';
-            if (isFirebaseReady && appState.auth && appState.auth.currentUser) {
-                userEmail = appState.auth.currentUser.email || 'Anonymous';
-            }
-
-            const currentUserInfo = {
-                id: 99,
-                email: userEmail,
-                role: userRole || 'Loading...',
-                lastLogin: new Date().toLocaleDateString(),
-                isCurrent: true
-            };
-
-            const allUsers = [currentUserInfo, ...mockUsers.filter(u => u.email !== currentUserInfo.email && u.email !== userEmail)];
-
-            const container = createElement('div', 'space-y-6');
-            container.appendChild(createElement('h2', 'text-3xl font-extrabold text-gray-900 border-b pb-2 flex items-center', [
-                getIcon('users', 'w-7 h-7 mr-2 text-indigo-600'),
-                createElement('span', '', 'User & Application Management')
-            ]));
-            
-            const statusBox = createElement('div', 'bg-indigo-50 border-l-4 border-indigo-400 text-indigo-700 p-4 rounded-xl shadow-md');
-            statusBox.appendChild(createElement('p', 'font-bold', 'Your Current Role Status:'));
-            statusBox.appendChild(createElement('p', 'text-sm', `User ID (UID): ` + `<span class="font-mono bg-indigo-100 p-1 rounded text-xs">${userId || 'N/A'}</span>`));
-            statusBox.appendChild(createElement('p', 'text-sm', `Authenticated Role (from token claims): ` + `<span class="font-bold text-lg text-indigo-900">${userRole}</span>`));
-            container.appendChild(statusBox);
-
-            container.appendChild(createElement('h3', 'text-2xl font-semibold text-gray-800 pt-4', 'Mock User Management (Demonstration)'));
-
-            const tableContainer = createElement('div', 'bg-white rounded-xl shadow-lg overflow-x-auto table-responsive border');
-            const table = createElement('table', 'min-w-full divide-y divide-gray-200');
-            
-            // Table Head
-            const thead = createElement('thead', 'bg-gray-50');
-            const trHead = createElement('tr');
-            ['Email', 'Role', 'Last Login', 'Status'].forEach(header => {
-                trHead.appendChild(createElement('th', 'px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider', header));
-            });
-            thead.appendChild(trHead);
-            table.appendChild(thead);
-
-            // Table Body
-            const tbody = createElement('tbody', 'bg-white divide-y divide-gray-200');
-            allUsers.forEach(user => {
-                const trBody = createElement('tr', `${user.isCurrent ? 'bg-indigo-50 font-bold' : 'hover:bg-gray-50'} transition-colors`);
-                
-                const roleClass = user.role.includes('Admin') ? 'bg-red-100 text-red-800' :
-                                    user.role.includes('Engineer') ? 'bg-green-100 text-green-800' :
-                                    'bg-blue-100 text-blue-800';
-
-                trBody.appendChild(createElement('td', 'px-6 py-4 whitespace-nowrap text-sm text-gray-900', user.email));
-                
-                const roleTd = createElement('td', 'px-6 py-4 whitespace-nowrap text-sm font-semibold');
-                roleTd.appendChild(createElement('span', `px-2 inline-flex text-xs leading-5 font-semibold rounded-full ${roleClass}`, user.role));
-                trBody.appendChild(roleTd);
-                
-                trBody.appendChild(createElement('td', 'px-6 py-4 whitespace-nowrap text-sm text-gray-500', user.lastLogin));
-                
-                const statusTd = createElement('td', 'px-6 py-4 whitespace-nowrap text-sm text-gray-500');
-                statusTd.innerHTML = user.isCurrent ? '<span class="text-indigo-600 font-bold">Current User</span>' : 'Active';
-                trBody.appendChild(statusTd);
-                
-                tbody.appendChild(trBody);
-            });
-
-            table.appendChild(tbody);
-            tableContainer.appendChild(table);
-            container.appendChild(tableContainer);
-
-            return container;
-        }
-
-        function createPlaceholderView(title, roleRequired) {
-            const container = createElement('div', 'p-6 bg-gray-50 rounded-xl shadow-inner');
-            container.appendChild(createElement('h2', 'text-2xl font-bold text-gray-800', title));
-            container.appendChild(createElement('p', 'text-indigo-600 mt-2 font-medium', `[Feature Development Required] - Full CRUD functionality for this section needs to be implemented.`));
-            container.appendChild(createElement('p', 'text-gray-600 mt-1', `Access: ${roleRequired}`));
-            return container;
-        }
-
-
-        // --- MAIN RENDER LOOP ---
-
-
-        function render() {
-            const root = document.getElementById('root');
-            if (!root) return; // Guard clause in case DOM is not ready
-            root.innerHTML = '';
-
-            const container = createElement('div', 'min-h-screen bg-gray-100 print-full');
-            const maxWDiv = createElement('div', 'max-w-7xl mx-auto');
-            container.appendChild(maxWDiv);
-
-            // 1. Message Box Area
-            const msgArea = createElement('div', 'p-4 pt-8 print-hide');
-            const message = appState.error || (appState.isAuthenticated ?
-                `Welcome, User ID: ${appState.userId.substring(0, 8)}... Current Role: ${appState.userRole}` :
-                "Please sign in to continue.");
-            const type = appState.error ? 'error' : (appState.isAuthenticated ? 'success' : 'info');
-            
-            msgArea.appendChild(createMessageBox(type, message, () => {
-                appState.error = null;
-                render();
-            }));
-            maxWDiv.appendChild(msgArea);
-
-            // 2. Header
-            const header = createElement('header', 'flex justify-between items-center p-4 bg-white shadow-md rounded-b-xl print-hide');
-            const logo = createElement('div', 'flex items-center');
-            logo.appendChild(getIcon('shield', 'w-8 h-8 text-indigo-600 mr-3'));
-            logo.appendChild(createElement('h1', 'text-2xl font-bold text-gray-900', 'OT Guardian <span class="text-indigo-600">Demo</span>'));
-            header.appendChild(logo);
-
-            const userControls = createElement('div', 'flex items-center space-x-4');
-            userControls.appendChild(createElement('span', 'text-sm font-medium text-gray-600 hidden sm:block',
-                `Role: <span class="font-semibold ${appState.userRole === 'Admin' ? 'text-red-600' : 'text-indigo-600'}">${appState.userRole}</span>`
-            ));
-            
-            if (appState.isAuthenticated) {
-                const signOutBtn = createElement('button', 'flex items-center p-2 rounded-full bg-red-500 text-white hover:bg-red-600 transition-all shadow-md', getIcon('log-out', 'w-5 h-5'));
-                signOutBtn.title = "Sign Out";
-                signOutBtn.addEventListener('click', handleSignOut);
-                userControls.appendChild(signOutBtn);
-            }
-            header.appendChild(userControls);
-            maxWDiv.appendChild(header);
-
-            // 3. Navigation Bar (Only show if authenticated)
-            if (appState.isAuthenticated) {
-                const nav = createElement('nav', 'flex space-x-1 p-3 border-b bg-white shadow-inner rounded-xl mt-4 mx-4 overflow-x-auto whitespace-nowrap print-hide');
-                
-                const navItems = [
-                    { view: 'riskDashboard', label: 'Dashboard', icon: 'bar-chart-2', roles: ['Engineer', 'Auditor', 'Admin'] },
-                    { view: 'assetBuilder', label: 'Assets', icon: 'cpu', roles: ['Engineer', 'Admin'] },
-                    { view: 'securityControls', label: 'Controls', icon: 'check-circle', roles: ['Engineer', 'Auditor', 'Admin'] },
-                    { view: 'remediationTasks', label: 'Remediation', icon: 'hard-hat', roles: ['Engineer', 'Admin'] },
-                    { view: 'auditorReport', label: 'Auditor Report', icon: 'file-text', roles: ['Auditor', 'Admin'] },
-                    { view: 'admin', label: 'Admin', icon: 'users', roles: ['Admin'] },
-                ];
-
-                navItems.forEach(item => {
-                    if (!item.roles.includes(appState.userRole)) return;
-
-                    const btn = createElement(
-                        'button',
-                        'flex items-center px-3 py-2 text-sm font-semibold rounded-lg transition-all duration-150'
-                    );
-
-                    btn.classList.add(
-                        ...(appState.currentView === item.view
-                            ? ['bg-indigo-700', 'text-white', 'shadow-md']
-                            : ['text-gray-700', 'hover:bg-indigo-100'])
-                    );
-
-                    
-                    const icon = getIcon(item.icon, 'w-4 h-4 mr-2');
-                    const label = document.createTextNode(item.label);
-                    
-                    btn.append(icon, label);
-                    btn.addEventListener('click', () => {
-                        appState.currentView = item.view;
-                        render();
-                    });
-                    nav.appendChild(btn);
-                });
-                maxWDiv.appendChild(nav);
-            }
-
-
-            // 4. Deployment Status Bar (Only show if authenticated)
-            if (appState.isAuthenticated) {
-                const statusClass = appState.deploymentStatus.status === 'Online' ? 'bg-green-100 text-green-800' :
-                                        appState.deploymentStatus.status === 'Warning' ? 'bg-yellow-100 text-yellow-800' :
-                                        'bg-red-100 text-red-800';
-                
-                const lastCheckTime = appState.deploymentStatus.lastCheck?.seconds ?
-                    new Date(appState.deploymentStatus.lastCheck.seconds * 1000).toLocaleString() : 'N/A';
-
-                const statusBar = createElement('div', `p-3 text-sm font-semibold rounded-xl text-center shadow-md mt-4 mx-4 ${statusClass} print-hide`);
-                statusBar.innerHTML = `${getIcon('zap', 'w-4 h-4 inline mr-1').outerHTML} Deployment Status: ${appState.deploymentStatus.status} | Last Check: ${lastCheckTime}`;
-                maxWDiv.appendChild(statusBar);
-            }
-
-
-
-            // 5. Main Content Area
-            const main = createElement('main', 'p-4 sm:p-6');
-            const contentBox = createElement('div', 'bg-white p-6 rounded-xl shadow-2xl');
-            main.appendChild(contentBox);
-
-
-            let contentElement;
-
-            if (!appState.isAuthReady) {
-                contentElement = createLoadingView();
-            } else if (!appState.isAuthenticated) {
-                // <-- NEW LOGIC: Display login view if not authenticated -->
-                contentElement = createLoginView();
-            } else if (!appState.isFirebaseReady) {
-                // Mock Mode View Fallback (Only if Firebase init failed OR if an auth error occurred)
-                const mockModeContainer = createElement('div', 'text-center p-12');
-                mockModeContainer.appendChild(createElement('h2', 'text-3xl font-bold text-red-600 mb-4', 'MOCK DATA MODE (OFFLINE)'));
-                mockModeContainer.appendChild(createElement('p', 'text-xl text-gray-700 mb-8', 'Authentication failed or Firebase connection is offline. Displaying static data.'));
-                contentElement = mockModeContainer;
-            } else {
-                const currentData = appState.data.risks.length > 0 ? appState.data : appState.mockData;
-
-                switch (appState.currentView) {
-                    case 'riskDashboard':
-                        contentElement = createRiskDashboardView(currentData);
-                        break;
-                    case 'assetBuilder':
-                    case 'securityControls':
-                    case 'remediationTasks':
-                        const requiredRole = appState.currentView === 'securityControls' ? 'Engineer/Auditor/Admin' : 'Engineer/Admin';
-                        contentElement = createPlaceholderView(appState.currentView.split(/(?=[A-Z])/).map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' '), requiredRole);
-                        break;
-                    case 'auditorReport':
-                        if (appState.userRole === 'Auditor' || appState.userRole === 'Admin') {
-                            contentElement = createAuditorReportView(currentData);
-                        } else {
-                            contentElement = createElement('div', 'p-6 text-red-500 font-bold', 'Access Denied: Requires Auditor or Admin role.');
+            useEffect(() => {
+                const initAuth = async () => {
+                    if (window.auth) {
+                        try {
+                            // 1. Attempt custom token sign-in first (if token exists)
+                            if (window.__initial_auth_token) {
+                                await window.signInWithCustomToken(window.auth, window.__initial_auth_token);
+                            } else {
+                                // 2. Fallback to anonymous sign-in if no custom token is available
+                                // This provides a UID for private storage, even if unauthenticated
+                                await window.signInAnonymously(window.auth);
+                            }
+                        } catch (error) {
+                            console.error("Initial auth attempt failed:", error);
+                            // If sign-in fails, the auth state will be null, and the listener below will handle it.
+                        } finally {
+                            // 3. Set up Auth State Listener
+                            // This listener is crucial and handles subsequent changes and initial state
+                            const unsubscribe = window.onAuthStateChanged(window.auth, (user) => {
+                                const newUserId = user ? user.uid : null;
+                                setUserId(newUserId);
+                               
+                                // Mock role assignment for demonstration purposes
+                                if (newUserId) {
+                                    // Assign 'engineer' role for logged-in users, 'demo' for anonymous
+                                    const newRole = user.isAnonymous ? 'Demo User' : 'Engineer';
+                                    setUserRole(newRole);
+                                } else {
+                                    setUserRole(null);
+                                    setCurrentView('Dashboard'); // Reset view on sign-out
+                                }
+                                setIsAuthChecking(false); // Auth check is complete
+                            });
+                            // Return cleanup function
+                            return unsubscribe;
                         }
-                        break;
-                    case 'admin':
-                        if (appState.userRole === 'Admin') {
-                            contentElement = createAdminView();
-                        } else {
-                            contentElement = createElement('div', 'p-6 text-red-500 font-bold', 'Access Denied: Requires Admin role.');
-                        }
-                        break;
-                    default:
-                        // Default to dashboard when authenticated
-                        contentElement = createRiskDashboardView(currentData);
-                }
-            }
-            
-            contentBox.appendChild(contentElement);
-            maxWDiv.appendChild(main);
-            root.appendChild(container);
-
-            window.lucide.createIcons();
-        }
-
-
-        // --- FIREBASE LOGIC ---
-
-        // <-- NEW FUNCTION: Handles Email/Password Sign-in -->
-        async function handleEmailPasswordSignIn(email, password) {
-            if (!appState.auth) return;
-            appState.error = null; // Clear previous errors
-            
-            // Optional: Briefly show loading view during sign-in attempt
-            appState.currentView = 'riskDashboard'; // Switch to dashboard view for post-login display
-            render(); 
-
-            try {
-                // Standard Firebase Email/Password login
-                await window.firebase.signInWithEmailAndPassword(appState.auth, email, password);
-                // Auth listener (updateAuthState) will handle success
-            } catch (e) {
-                console.error("Email/Password Sign-in Error:", e.code, e.message);
-                appState.error = `Login failed: Invalid credentials or account does not exist.`; // Simplified message for end-user
-                appState.currentView = 'login'; // Return to login screen on failure
-                render();
-            }
-        }
-        
-        // <-- NEW FUNCTION: Handles Demon User (Anonymous) Sign-in -->
-        async function signInAsDemonUser() {
-            if (!appState.auth) return;
-            appState.error = null;
-            appState.currentView = 'riskDashboard';
-            render(); 
-            try {
-                await window.firebase.signInAnonymously(appState.auth);
-                appState.error = "Signed in as Demon User (Read-Only).";
-                // Role will be set to 'Engineer' by default in updateAuthState for read-only access
-            } catch (e) {
-                console.error("Demon User (Anonymous) Sign-in Error:", e.message);
-                appState.error = "Failed to sign in as Demon User. Firebase Offline.";
-                appState.isAuthReady = true;
-                appState.isFirebaseReady = false; 
-                render();
-            }
-        }
-
-
-        async function updateAuthState(user) {
-            if (user) {
-                appState.isAuthenticated = true;
-                appState.userId = user.uid;
-                
-                try {
-                    // Force token refresh to read custom claims (role)
-                    const idTokenResult = await user.getIdTokenResult(true);
-                    
-                    // User Role Logic: If no custom claims, assume 'Engineer' for read-only functionality (including Demon User)
-                    const role = idTokenResult.claims.role || 'Engineer'; 
-                    appState.userRole = role;
-                    console.log(`User UID: ${user.uid} | Role set from token claims: ${role}`);
-
-                    // Reset to dashboard after successful login
-                    if (appState.currentView === 'login') {
-                        appState.currentView = 'riskDashboard';
+                    } else {
+                        console.error("Firebase Auth not initialized.");
+                        setIsAuthChecking(false);
                     }
-                } catch (e) {
-                    console.error("Failed to get ID token result, defaulting role:", e);
-                    appState.userRole = 'Engineer';
+                };
+
+                initAuth();
+            }, []); // Run once on mount
+
+            // --- Firestore Data Listener ---
+
+            useEffect(() => {
+                let unsubscribe;
+               
+                // Only attempt to set up listeners once the auth check is complete
+                if (window.db && !isAuthChecking) {
+                    // This listener is for public data (Deployment Status)
+                    unsubscribe = window.onSnapshot(getSystemStatusDocRef(), (docSnapshot) => {
+                        if (docSnapshot.exists()) {
+                            setDeploymentStatus(docSnapshot.data());
+                        } else {
+                            // Create mock data if it doesn't exist for a better demo
+                             window.setDoc(getSystemStatusDocRef(), {
+                                status: 'Online',
+                                details: 'All systems operational.',
+                                lastCheck: new Date(),
+                            }).catch(e => console.error("Error creating initial status doc:", e));
+                            setDeploymentStatus({
+                                status: 'Online',
+                                details: 'All systems operational.',
+                                lastCheck: new Date(),
+                            });
+                        }
+                    }, (error) => {
+                        console.error("Error listening to deployment status:", error);
+                        // Set a failed state
+                        setDeploymentStatus({ status: 'Error', details: error.message, lastCheck: new Date() });
+                    });
                 }
-            } else {
-                appState.isAuthenticated = false;
-                appState.userId = null;
-                appState.userRole = 'Engineer'; // Default role for unauthenticated views or demon mode fallback
-                appState.currentView = 'login'; // Go back to login screen
-            }
-            appState.isAuthReady = true;
-            render();
-            
-            // Initialize data listeners only once, when authenticated and ready
-            if (appState.isFirebaseReady && appState.isAuthenticated && !appState.dataInitialized) {
-                initializeDataListeners();
-            }
-        }
+
+                return () => {
+                    if (unsubscribe) unsubscribe();
+                };
+            }, [isAuthChecking]); // Re-run when auth check completes
+
+            // --- Handlers ---
+
+            // Fix: This handler now correctly uses the Firebase utility
+            const handleDemoSignIn = useCallback(async () => {
+                if (isLoggingIn) return;
+                setIsLoggingIn(true);
+                try {
+                    await window.signInAnonymously(window.auth);
+                    // onAuthStateChanged listener handles state update
+                } catch (error) {
+                    console.error("Demo sign-in failed:", error);
+                    alert("Error signing in as demo user. Check console for details.");
+                } finally {
+                    setIsLoggingIn(false);
+                }
+            }, [isLoggingIn]);
+           
+            // Mock Login handler (since we don't have a real backend)
+            const handleLogin = useCallback(async (username, password) => {
+                if (isLoggingIn) return;
+                setIsLoggingIn(true);
+               
+                // In a real app, this would call a Firebase/backend login function (e.g., signInWithEmailAndPassword)
+                console.log(`Attempting mock login for: ${username}`);
+               
+                // Simulate network latency and success
+                await new Promise(resolve => setTimeout(resolve, 1500));
+
+                try {
+                    // For the mock, we sign in anonymously and set the role locally
+                    await window.signInAnonymously(window.auth);
+                    // The onAuthStateChanged listener handles setting the UID and 'Engineer' role based on mock logic
+                } catch (error) {
+                    console.error("Mock login attempt failed (via anonymous sign-in):", error);
+                    alert("Mock login failed. See console.");
+                } finally {
+                    setIsLoggingIn(false);
+                }
+            }, [isLoggingIn]);
+
+            const handleSignOut = useCallback(async () => {
+                try {
+                    await window.signOut(window.auth);
+                    // onAuthStateChanged listener handles setting userId to null and clearing state
+                } catch (error) {
+                    console.error("Sign out failed:", error);
+                }
+            }, []);
 
 
-        async function initializeDataListeners() {
-            if (!appState.db || !appState.userId || appState.dataInitialized) return;
+            // --- Navigation & Rendering Logic ---
 
-            appState.dataInitialized = true;
-            const userIdPath = appState.userId;
-
-            const collectionsToListen = [
-                { stateKey: 'assets', path: `artifacts/${appState.appId}/users/${userIdPath}/assets` },
-                { stateKey: 'controls', path: `artifacts/${appState.appId}/users/${userIdPath}/controls` },
-                { stateKey: 'risks', path: `artifacts/${appState.appId}/users/${userIdPath}/risks` },
-                { stateKey: 'tasks', path: `artifacts/${appState.appId}/users/${userIdPath}/tasks` },
+            const navItems = [
+                { label: 'Dashboard', icon: <Icon name="LayoutDashboard" />, view: 'Dashboard' },
+                { label: 'Reports', icon: <Icon name="BarChart" />, view: 'Reports' },
+                { label: 'Settings', icon: <Icon name="Settings" />, view: 'Settings' },
             ];
 
-            collectionsToListen.forEach(({ stateKey, path }) => {
-                const colRef = window.firebase.collection(appState.db, path);
-                const q = window.firebase.query(colRef);
-                window.firebase.onSnapshot(q, (snapshot) => {
-                    appState.data[stateKey] = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-                    render();
-                }, (err) => {
-                    console.error(`Error fetching ${stateKey}:`, err);
-                    appState.error = `Failed to load ${stateKey} data. Check Firestore rules.`;
-                    render();
-                });
-            });
-
-            // Deployment status listener (public data)
-            const statusDocRef = window.firebase.doc(appState.db, `artifacts/${appState.appId}/public/data/deployment/status`);
-            window.firebase.onSnapshot(statusDocRef, (doc) => {
-                if (doc.exists()) {
-                    appState.deploymentStatus = doc.data();
-                } else {
-                    const defaultStatus = { status: 'Warning', lastCheck: window.firebase.serverTimestamp(), message: 'Status document missing. Initializing...' };
-                    window.firebase.setDoc(statusDocRef, defaultStatus, { merge: true }).catch(e => console.error("Error setting default status:", e));
-                    appState.deploymentStatus = defaultStatus;
+            const renderView = () => {
+                // Show unauthorized message if not signed in (after checking is complete)
+                if (!userId) {
+                    return (
+                        <div className="flex flex-col items-center justify-center h-[500px] text-center bg-white rounded-xl shadow-lg border-2 border-dashed border-gray-300">
+                            <Lock className="w-12 h-12 text-red-500 mb-4" />
+                            <h2 className="text-2xl font-bold text-gray-800">Access Denied</h2>
+                            <p className="text-gray-500 mt-2">Please sign in to view and manage deployments.</p>
+                            <button
+                                className="mt-6 px-6 py-2 bg-indigo-600 text-white font-medium rounded-lg shadow hover:bg-indigo-700 transition duration-150"
+                                onClick={handleDemoSignIn}
+                            >
+                                Continue to Demo Login
+                            </button>
+                        </div>
+                    );
                 }
-                render();
-            }, (err) => {
-                console.error("Error fetching deployment status:", err);
-                render();
-            });
-        }
 
-
-        // <-- MODIFIED: No longer automatically falls back to signInAnonymously -->
-        async function attemptCustomTokenSignIn() {
-            if (!appState.auth) return;
-            try {
-                const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
-                
-                if (initialAuthToken) {
-                    await window.firebase.signInWithCustomToken(appState.auth, initialAuthToken);
-                } else {
-                    // No custom token provided. Just set auth ready.
-                    appState.isAuthReady = true;
-                    render();
+                switch (currentView) {
+                    case 'Dashboard':
+                        return <DashboardView userId={userId} userRole={userRole} deploymentStatus={deploymentStatus} />;
+                    case 'Reports':
+                        return <ReportsView userId={userId} userRole={userRole} />;
+                    case 'Settings':
+                        return <SettingsView userId={userId} userRole={userRole} />;
+                    default:
+                        return <DashboardView userId={userId} userRole={userRole} deploymentStatus={deploymentStatus} />;
                 }
-            } catch (e) {
-                console.error("Authentication Error:", e.message);
-                appState.error = "Initial authentication attempt failed. Please sign in below.";
-                appState.isAuthReady = true;
-                appState.isFirebaseReady = true; // Keep Firebase ready flag so we can see the login form
-                render();
+            };
+           
+            // --- Main Render ---
+
+            // Loading state while Firebase is initializing
+            if (isAuthChecking) {
+                return (
+                    <div className="min-h-screen flex items-center justify-center bg-gray-100">
+                        <div className="text-center p-8 bg-white rounded-xl shadow-lg">
+                            <Icon name="Loader" className="w-10 h-10 text-indigo-500 mx-auto animate-spin" />
+                            <p className="mt-4 text-gray-600 font-medium">Initializing Security Modules...</p>
+                        </div>
+                    </div>
+                );
             }
-        }
 
-
-        async function handleSignOut() {
-            if (appState.auth) {
-                try {
-                    await window.firebase.signOut(appState.auth);
-                    appState.currentView = 'login'; // Redirect to login after sign out
-                    appState.error = "Successfully signed out.";
-                    render();
-                } catch (e) {
-                    console.error("Sign out error:", e);
-                    appState.error = "Failed to sign out.";
-                    render();
-                }
+            // If userId is null (not signed in), show the Login Screen
+            if (!userId) {
+                // FIX: Login Screen is now always interactive
+                return <LoginScreen handleLogin={handleLogin} handleDemoSignIn={handleDemoSignIn} isLoggingIn={isLoggingIn} />;
             }
-        }
 
+            // Main App UI (when signed in)
+            return (
+                <div className="flex flex-col md:flex-row min-h-screen bg-gray-100">
+                    {/* Sidebar/Navigation (Mobile: top bar, Desktop: left sidebar) */}
+                    <div className="bg-white p-4 shadow-xl md:w-64 md:min-h-screen print-hide">
+                        <div className="text-2xl font-extrabold text-indigo-700 mb-8 text-center">
+                            OT Guardian
+                        </div>
 
-        // --- MOCK DATA (For display when persistence fails) ---
-        appState.mockData = {
-            assets: [
-                { id: 'a1', name: 'PLC-101 (MOCK)', location: 'Floor 1', type: 'Controller' },
-                { id: 'a2', name: 'HMI-203 (MOCK)', location: 'Control Room', type: 'Interface' },
-                { id: 'a3', name: 'Sensor Array 5 (MOCK)', location: 'Assembly Line', type: 'Sensor' }
-            ],
-            controls: [
-                { id: 'c1', name: 'Network Segmentation', status: 'Deployed' },
-                { id: 'c2', name: 'Endpoint Protection', status: 'Deployed' },
-                { id: 'c3', name: 'Patch Management', status: 'In Progress' }
-            ],
-            risks: [
-                { id: 'r1', description: 'Unpatched firmware on PLC-101', assetId: 'a1', severity: 'Critical', status: 'Open' },
-                { id: 'r2', description: 'Weak password policy on HMI-203', assetId: 'a2', severity: 'High', status: 'Open' },
-                { id: 'r3', description: 'Missing network baseline for Sensor Array 5', assetId: 'a3', severity: 'Medium', status: 'In Progress' },
-                { id: 'r4', description: 'Potential phishing vector', assetId: 'a3', severity: 'Low', status: 'Closed' },
-                { id: 'r5', description: 'Zero-day vulnerability in SCADA server', assetId: 'a1', severity: 'Critical', status: 'Open' },
-                { id: 'r6', description: 'Unused old port open on PLC-101', assetId: 'a1', severity: 'Medium', status: 'Closed' }
-            ],
-            tasks: []
+                        <nav className="space-y-2">
+                            {navItems.map((item) => (
+                                <button
+                                    key={item.view}
+                                    onClick={() => setCurrentView(item.view)}
+                                    className={`flex items-center w-full p-3 rounded-xl transition duration-150 font-medium ${
+                                        currentView === item.view
+                                            ? 'bg-indigo-100 text-indigo-700 shadow-sm'
+                                            : 'text-gray-600 hover:bg-gray-50'
+                                    }`}
+                                >
+                                    {item.icon}
+                                    <span className="ml-3">{item.label}</span>
+                                </button>
+                            ))}
+                        </nav>
+                       
+                        {/* Sign Out Button */}
+                        <div className="mt-8 pt-4 border-t border-gray-100">
+                            <button
+                                onClick={handleSignOut}
+                                className="flex items-center w-full p-3 rounded-xl transition duration-150 font-medium text-red-600 hover:bg-red-50"
+                            >
+                                <LogOut className="w-5 h-5 mr-3" />
+                                Sign Out
+                            </button>
+                        </div>
+                    </div>
+                   
+                    {/* Main Content Area */}
+                    <div className="flex-1 overflow-y-auto p-4 md:p-8">
+                        {/* Header Bar */}
+                        <header className="flex justify-between items-center bg-white p-4 rounded-xl shadow-md mb-6 print-hide">
+                            <h1 className="text-xl font-bold text-gray-800">{currentView}</h1>
+                            <div className="flex items-center space-x-4">
+                                <div className="text-sm font-medium">
+                                    <span className="text-gray-500">Role:</span>
+                                    <span className="ml-2 px-3 py-1 bg-indigo-500 text-white rounded-full font-semibold shadow-sm">
+                                        {userRole}
+                                    </span>
+                                </div>
+                                <div className="text-sm font-medium text-gray-500 hidden sm:block">
+                                    <span className="text-gray-500">User ID:</span>
+                                    <span className="ml-1 font-mono text-xs bg-gray-100 p-1 rounded break-all">{userId ? userId.substring(0, 8) + '...' : 'N/A'}</span>
+                                </div>
+                            </div>
+                        </header>
+                       
+                        {/* Deployment Status Bar */}
+                        <div className={`p-3 text-sm font-semibold rounded-xl text-center shadow-md mb-6 ${
+                            deploymentStatus?.status === 'Online' ? 'bg-green-100 text-green-800 border border-green-300' :
+                            deploymentStatus?.status === 'Warning' ? 'bg-yellow-100 text-yellow-800 border border-yellow-300' :
+                            'bg-red-100 text-red-800 border border-red-300'
+                        } print-hide`}>
+                            <Zap className="w-4 h-4 inline mr-2" />
+                            Deployment Status: {deploymentStatus?.status || 'Loading...'} |
+                            Last Check: {deploymentStatus?.lastCheck?.seconds ? new Date(deploymentStatus.lastCheck.seconds * 1000).toLocaleString() : (deploymentStatus?.lastCheck instanceof Date ? deploymentStatus.lastCheck.toLocaleString() : 'N/A')}
+                        </div>
+
+                        {/* Main Content */}
+                        <main className="p-2">
+                            {renderView()}
+                        </main>
+                    </div>
+                </div>
+            );
         };
 
-
-        // --- INITIALIZATION ENTRY POINT ---
-
-        window.onload = function() {
-            // Check for Firebase availability (from the module script above)
-            if (typeof window.firebase === 'undefined' || !window.firebase.initializeApp) {
-                console.error("Firebase services failed to load from CDN. Check network connection.");
-                appState.error = "CRITICAL: Firebase services failed to load. Cannot connect to database.";
-                appState.isAuthReady = true;
-                render();
-                return;
-            }
-
-            try {
-                // Initialize using the hardcoded configuration
-                const app = window.firebase.initializeApp(MANUAL_FIREBASE_CONFIG);
-                appState.db = window.firebase.getFirestore(app);
-                appState.auth = window.firebase.getAuth(app);
-                window.firebase.setLogLevel('debug');
-                appState.isFirebaseReady = true;
-                appState.appId = MANUAL_FIREBASE_CONFIG.projectId;
-                
-                // Set up auth listener (this updates appState.isAuthReady and calls render/data listeners)
-                window.firebase.onAuthStateChanged(appState.auth, updateAuthState);
-
-                // Start the sign-in process (only checks for custom token, does NOT auto-sign-in anonymously now)
-                attemptCustomTokenSignIn();
-
-            } catch (e) {
-                console.error("Fatal Firebase Initialization Error:", e);
-                appState.error = "Fatal Firebase Error: Check console for configuration details.";
-                appState.isAuthReady = true;
-                appState.isFirebaseReady = false;
-                render();
-            }
-        };
-
+        // Standard React 18 rendering code
+        const container = document.getElementById('root');
+        const root = ReactDOM.createRoot(container);
+        root.render(<App />);
     </script>
 </body>
 </html>

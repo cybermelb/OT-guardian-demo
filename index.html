@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>OT Guardian App (Vanilla JS & Firebase Fix)</title>
+    <title>OT Guardian App </title>
     <!-- Load Tailwind CSS -->
     <script src="https://cdn.tailwindcss.com"></script>
    
@@ -73,7 +73,7 @@
                     console.warn("Platform Firebase config missing. Checking manual fallback.");
                    
                     // 2. Fallback for external deployment (e.g., Git) - MANUAL CONFIG GOES HERE
-                    /*
+                    
                     firebaseConfig = {
                         apiKey: "AIzaSyAyDKqA-j9yjp4KeGPGR49Cr6_q_drxBVs",
   authDomain: "otgaurdian.firebaseapp.com",
@@ -83,7 +83,7 @@
   appId: "1:719542806938:web:ed9376fcc7d04851e47223",
   measurementId: "G-9FMPGC5C93"
                     };
-                    */
+                    
 
                     if (!firebaseConfig) {
                         const failMsg = "CRITICAL: No Firebase configuration available. Running in read-only mock mode.";
@@ -615,3 +615,4 @@
     </script>
 </body>
 </html>
+

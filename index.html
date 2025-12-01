@@ -6,23 +6,16 @@
     <title>OT Guardian Security Posture Management</title>
     <!-- Load Tailwind CSS -->
     <script src="https://cdn.tailwindcss.com"></script>
-    <!-- Load React, ReactDOM, and Babel -->
-    <script crossorigin src="https://unpkg.com/react@18/umd/react.development.js"></script>
-    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
-    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
-    
-    <!-- Print/PDF Optimization for Reports -->
+    <!-- Lucide Icons (Vanilla JS compatible) -->
+    <script src="https://unpkg.com/lucide@latest"></script>
+   
     <style>
         @media print {
-            /* Hide navigation and controls for clean printing */
             .print-hide { display: none !important; }
-            /* Ensure content takes full width */
             .print-full { max-width: none !important; margin: 0 !important; padding: 0 !important; }
             body, .bg-gray-100 { background-color: white !important; }
-            /* Force table cells to break for smaller print pages */
             .table-responsive td, .table-responsive th { white-space: normal !important; }
         }
-        /* Custom progress ring style */
         .progress-ring__circle {
             transition: stroke-dashoffset 0.35s;
             transform: rotate(-90deg);
@@ -33,24 +26,34 @@
 <body class="bg-gray-100 min-h-screen">
     <div id="root"></div>
 
-    <script type="text/babel">
-        const { useState, useEffect, useMemo, useCallback } = React;
-
-        // --- FIREBASE IMPORTS ---
+    <script type="module">
+        // --- FIREBASE IMPORTS (ES Modules) ---
         import { initializeApp } from 'https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js';
         import { getFirestore, doc, setDoc, updateDoc, collection, query, onSnapshot, serverTimestamp, setLogLevel } from 'https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js';
-        import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged, signOut } from 'https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js';
-        import { X, CheckCircle, Cpu, HardHat, BarChart2, Shield, User, LogOut, Plus, Edit, Trash2, Save, Zap, FileText, Download, AlertTriangle, Settings, BookOpen, Layers, GitBranch, Key, RefreshCw } from 'lucide-react';
+        import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from 'https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js';
 
-        // --- CONFIGURATION CHECK & CONSTANTS ---
+        // --- GLOBAL STATE & CONFIGURATION ---
+        let app, db, auth;
+        let state = {
+            userId: null,
+            isAuthReady: false,
+            firebaseError: null,
+            userRole: 'admin', // Default role
+            assets: [],
+            tasks: [],
+            currentView: 'riskDashboard',
+            isModalOpen: false,
+        };
+
+        // Get config from global scope (provided by Canvas environment)
         let firebaseConfig = {};
         let appId = 'default-app-id';
         const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
-        
+       
         try {
             const fConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {};
             const aId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
-            
+           
             if (fConfig && fConfig.apiKey) {
                 firebaseConfig = fConfig;
                 appId = aId;
@@ -61,19 +64,42 @@
             console.error("Failed to parse Firebase configuration:", e);
         }
 
-        let app, db, auth;
         const PUBLIC_DATA_PATH = `/artifacts/${appId}/public/data`;
         const CONTROL_STATUSES = ['Not Assessed', 'Implemented', 'Partially Implemented', 'Not Implemented', 'Not Applicable'];
         const PURDUE_ZONES = ['Level 0: Process', 'Level 1: Basic Control', 'Level 2: Supervisory', 'Level 3: Operations', 'Level 4: Enterprise'];
-
-        // Mock Users for Admin Dashboard demonstration
         const MOCK_USERS = [
             { id: 'admin-temp-id', email: 'admin@otg.com', role: 'admin', uid: 'admin-UID-123456' },
             { id: 'manager-temp-id', email: 'manager@otg.com', role: 'manager', uid: 'manager-UID-123456' },
             { id: 'engineer-temp-id', email: 'engineer@otg.com', role: 'engineer', uid: 'engineer-UID-123456' },
         ];
-        
-        // --- FACTORY FUNCTIONS FOR COMPLEX DATA MODELS ---
+       
+        // --- UTILITY FUNCTIONS ---
+
+        const notify = (message, type = 'info') => {
+            console.log(`[${type.toUpperCase()}] ${message}`);
+            // In a real app, this would show a floating toast/modal instead of alert()
+            const messageBox = document.getElementById('message-box');
+            if (messageBox) {
+                messageBox.innerHTML = message;
+                messageBox.className = `p-3 rounded-xl mb-4 text-sm font-semibold ${
+                    type === 'error' ? 'bg-red-500 text-white' :
+                    type === 'success' ? 'bg-green-500 text-white' :
+                    'bg-blue-500 text-white'
+                }`;
+                messageBox.style.display = 'block';
+                setTimeout(() => messageBox.style.display = 'none', 3000);
+            }
+        };
+
+        const hasAccess = (requiredRoles) => requiredRoles.includes(state.userRole);
+
+        // Simple state update and re-render function
+        const updateState = (newState) => {
+            state = { ...state, ...newState };
+            renderApp();
+        };
+
+        // --- DATA FACTORIES & HELPERS ---
 
         const createInitialIEC62443 = () => ([
             { fr: 'FR1', name: 'Identification & Authentication Control (IAC)', targetSL: 3, controls: [
@@ -89,9 +115,8 @@
                 { cid: 'SI1', requirement: 'Anti-Malware', status: 'Not Assessed', notes: '' },
                 { cid: 'SI2', requirement: 'Patch Management', status: 'Not Assessed', notes: '' },
             ]},
-            // ... more FRs would go here ...
         ]);
-        
+       
         const createInitialFlatControls = (frameworkName) => {
             const controlsMap = {
                 sans: [
@@ -112,8 +137,7 @@
             zone: formData.zone,
             impact: formData.impact,
             createdBy: creatorId,
-            riskScore: 50, // Initial score
-            // Complex Nested Structures
+            riskScore: 50,
             iec62443: createInitialIEC62443(),
             sans: createInitialFlatControls('sans'),
             ciFortify: createInitialFlatControls('ciFortify'),
@@ -121,430 +145,246 @@
             updatedAt: serverTimestamp(),
         });
 
+        // --- DATA OPERATIONS ---
 
-        // --- UTILITY COMPONENTS ---
+        const addAsset = async (formData) => {
+            const newAsset = createNewAsset(formData, state.userId);
+            try {
+                const assetRef = doc(collection(db, `${PUBLIC_DATA_PATH}/assets`));
+                await setDoc(assetRef, newAsset);
+                notify("Asset added successfully!", 'success');
+            } catch (e) {
+                notify(`Error adding asset: ${e.message}`, 'error');
+            }
+        };
+       
+        const updateAssetControl = async (assetId, framework, controlPath, newStatus) => {
+            const assetRef = doc(db, `${PUBLIC_DATA_PATH}/assets`, assetId);
+            const assetToUpdate = state.assets.find(a => a.id === assetId);
 
-        const LoadingState = ({ message = 'Initializing Firebase connection...' }) => (
-            <div className="flex flex-col items-center justify-center p-20 bg-white rounded-xl shadow-lg mt-10">
-                <div className="animate-spin rounded-full h-12 w-12 border-b-4 border-indigo-600 mb-4"></div>
-                <span className="text-xl font-medium text-indigo-700">{message}</span>
-            </div>
-        );
+            if (!assetToUpdate) {
+                notify("Asset not found for update.", 'error');
+                return;
+            }
 
-        const ErrorState = ({ title, message }) => (
-            <div className="flex flex-col items-center justify-center p-20 bg-red-50 rounded-xl shadow-lg border-2 border-red-300 mt-10">
-                <AlertTriangle className="w-12 h-12 text-red-500 mb-4" />
-                <h2 className="text-2xl font-bold text-red-800 mb-2">{title}</h2>
-                <p className="text-gray-700 text-center max-w-md">{message}</p>
-            </div>
-        );
+            try {
+                const updatedAsset = JSON.parse(JSON.stringify(assetToUpdate)); // Deep clone
+                let updateData = {};
 
-        const ProgressRing = ({ percentage, color = '#4F46E5', radius = 60, stroke = 10 }) => {
-            const normalizedRadius = radius - stroke * 2;
-            const circumference = normalizedRadius * 2 * Math.PI;
-            const strokeDashoffset = circumference - (percentage / 100) * circumference;
-
-            return (
-                <svg height={radius * 2} width={radius * 2} className="mx-auto">
-                    <circle
-                        stroke="#E0E7FF"
-                        fill="transparent"
-                        strokeWidth={stroke}
-                        r={normalizedRadius}
-                        cx={radius}
-                        cy={radius}
-                    />
-                    <circle
-                        stroke={color}
-                        fill="transparent"
-                        strokeWidth={stroke}
-                        strokeDasharray={circumference + ' ' + circumference}
-                        style={{ strokeDashoffset }}
-                        r={normalizedRadius}
-                        cx={radius}
-                        cy={radius}
-                        className="progress-ring__circle"
-                    />
-                    <text x="50%" y="50%" textAnchor="middle" dy=".3em" fontSize="1.2em" fontWeight="bold" fill={color}>
-                        {Math.round(percentage)}%
-                    </text>
-                </svg>
-            );
+                if (framework === 'iec62443') {
+                    const [frIndex, controlIndex] = controlPath;
+                    updatedAsset.iec62443[frIndex].controls[controlIndex].status = newStatus;
+                    updateData = { iec62443: updatedAsset.iec62443, updatedAt: serverTimestamp() };
+                } else {
+                    const controlIndex = controlPath;
+                    updatedAsset[framework][controlIndex].status = newStatus;
+                    updateData = { [framework]: updatedAsset[framework], updatedAt: serverTimestamp() };
+                }
+                await updateDoc(assetRef, updateData);
+                notify("Control status updated.", 'success');
+            } catch (e) {
+                notify(`Error updating control status: ${e.message}`, 'error');
+            }
         };
 
-        // --- MAIN APP COMPONENT ---
+        const addTask = async (assetName, description, priority = 'Medium') => {
+            try {
+                const taskRef = collection(db, `${PUBLIC_DATA_PATH}/remediationTasks`);
+                await setDoc(doc(taskRef), {
+                    assetName,
+                    description,
+                    priority,
+                    status: 'Open',
+                    createdBy: state.userId,
+                    createdAt: serverTimestamp(),
+                });
+                notify("Remediation Task added.", 'success');
+            } catch (e) {
+                notify(`Error adding task: ${e.message}`, 'error');
+            }
+        };
 
-        const App = () => {
-            const [userId, setUserId] = useState(null);
-            const [isAuthReady, setIsAuthReady] = useState(false);
-            const [firebaseError, setFirebaseError] = useState(null);
-            
-            // Temporary Role State for demonstration purposes
-            const [userRole, setUserRole] = useState('admin'); // Default role
-            
-            // App Data State
-            const [assets, setAssets] = useState([]);
-            const [tasks, setTasks] = useState([]);
-            const [currentView, setCurrentView] = useState('riskDashboard');
-            const [isModalOpen, setIsModalOpen] = useState(false);
+        const updateTaskStatus = async (taskId, newStatus) => {
+            try {
+                const taskRef = doc(db, `${PUBLIC_DATA_PATH}/remediationTasks`, taskId);
+                await updateDoc(taskRef, { status: newStatus, updatedAt: serverTimestamp() });
+                notify(`Task status updated to ${newStatus}.`, 'success');
+            } catch (e) {
+                notify(`Error updating task status: ${e.message}`, 'error');
+            }
+        };
 
-            // --- FIREBASE INITIALIZATION AND AUTH (Vanilla JS style lifecycle) ---
+        // --- FIREBASE INITIALIZATION & DATA LISTENERS ---
 
-            const signInUser = useCallback(async () => {
-                try {
-                    if (!auth) return;
+        const initializeFirebase = async () => {
+            if (Object.keys(firebaseConfig).length === 0) {
+                updateState({ firebaseError: "Firebase configuration is missing.", isAuthReady: true });
+                return;
+            }
 
-                    if (initialAuthToken) {
-                        await signInWithCustomToken(auth, initialAuthToken);
-                    } else {
-                        await signInAnonymously(auth);
-                    }
-                } catch (error) {
-                    console.error("Sign-in failed:", error);
-                } finally {
-                    // CRITICAL: Dismiss loading state regardless of outcome
-                    setIsAuthReady(true);
-                }
-            }, []);
-            
-            useEffect(() => {
-                if (Object.keys(firebaseConfig).length === 0) {
-                    setFirebaseError("Firebase configuration is missing.");
-                    setIsAuthReady(true);
-                    return;
-                }
+            try {
+                app = initializeApp(firebaseConfig);
+                db = getFirestore(app);
+                auth = getAuth(app);
+                setLogLevel('debug');
 
-                try {
-                    app = initializeApp(firebaseConfig);
-                    db = getFirestore(app);
-                    auth = getAuth(app);
-                    setLogLevel('debug'); // Enable detailed Firebase logging
-
-                    const unsubscribe = onAuthStateChanged(auth, (user) => {
-                        if (user) {
-                            setUserId(user.uid);
+                onAuthStateChanged(auth, (user) => {
+                    updateState({ userId: user ? user.uid : null });
+                });
+               
+                // Sign in logic
+                const attemptSignIn = async () => {
+                    try {
+                        if (initialAuthToken) {
+                            await signInWithCustomToken(auth, initialAuthToken);
                         } else {
-                            setUserId(null);
+                            await signInAnonymously(auth);
                         }
-                        // Setting isAuthReady here is critical for the initial load
-                        // and prevents the page from hanging if auth fails or is slow.
-                        setIsAuthReady(true);
-                    });
-
-                    // Kick off sign-in if no user is found/listener hasn't fired
-                    if (!auth.currentUser) {
-                        signInUser();
+                    } catch (error) {
+                        notify("Sign-in failed.", 'error');
+                    } finally {
+                        // CRITICAL: Dismiss loading state
+                        updateState({ isAuthReady: true });
                     }
+                };
 
-                    return () => unsubscribe();
-                } catch (error) {
-                    console.error("Firebase Initialization Error:", error);
-                    setFirebaseError(`Initialization failed: ${error.message}`);
-                    setIsAuthReady(true); // Dismiss loading on init failure
+                if (!auth.currentUser) {
+                    await attemptSignIn();
+                } else {
+                    updateState({ isAuthReady: true });
                 }
-            }, [signInUser]);
 
-            // --- FIRESTORE DATA LISTENING ---
-
-            useEffect(() => {
-                if (!db || !isAuthReady || !userId) return;
-
-                const assetUnsub = onSnapshot(query(collection(db, `${PUBLIC_DATA_PATH}/assets`)), (snapshot) => {
+                // Data Listeners
+                onSnapshot(query(collection(db, `${PUBLIC_DATA_PATH}/assets`)), (snapshot) => {
                     const fetchedAssets = snapshot.docs.map(doc => ({
                         id: doc.id,
                         ...doc.data(),
-                        // Ensure nested arrays are correctly initialized if missing
                         iec62443: doc.data().iec62443 || createInitialIEC62443(),
                         sans: doc.data().sans || createInitialFlatControls('sans'),
                         ciFortify: doc.data().ciFortify || createInitialFlatControls('ciFortify'),
                     })).filter(doc => !doc.deleted);
-                    setAssets(fetchedAssets);
-                }, (error) => console.error("Error fetching assets:", error));
-                
-                const tasksUnsub = onSnapshot(query(collection(db, `${PUBLIC_DATA_PATH}/remediationTasks`)), (snapshot) => {
+                    updateState({ assets: fetchedAssets });
+                }, (error) => notify(`Error fetching assets: ${error.message}`, 'error'));
+               
+                onSnapshot(query(collection(db, `${PUBLIC_DATA_PATH}/remediationTasks`)), (snapshot) => {
                     const fetchedTasks = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })).filter(doc => !doc.deleted);
-                    setTasks(fetchedTasks);
-                }, (error) => console.error("Error fetching tasks:", error));
+                    updateState({ tasks: fetchedTasks });
+                }, (error) => notify(`Error fetching tasks: ${error.message}`, 'error'));
 
-                return () => {
-                    assetUnsub();
-                    tasksUnsub();
-                };
-            }, [isAuthReady, userId]);
-
-            // --- DATA OPERATIONS ---
-
-            const addAsset = async (formData) => {
-                const newAsset = createNewAsset(formData, userId);
-                try {
-                    const assetRef = doc(collection(db, `${PUBLIC_DATA_PATH}/assets`));
-                    await setDoc(assetRef, newAsset);
-                    console.log("Asset added with ID: ", assetRef.id);
-                } catch (e) {
-                    console.error("Error adding asset: ", e);
-                }
-            };
-            
-            const updateAssetControl = async (assetId, framework, controlPath, newStatus) => {
-                const assetRef = doc(db, `${PUBLIC_DATA_PATH}/assets`, assetId);
-                const assetToUpdate = assets.find(a => a.id === assetId);
-
-                if (!assetToUpdate) {
-                    console.error("Asset not found for update.");
-                    return;
-                }
-
-                try {
-                    const updatedAsset = { ...assetToUpdate };
-
-                    if (framework === 'iec62443') {
-                        // controlPath is an array: [frIndex, controlIndex]
-                        const [frIndex, controlIndex] = controlPath;
-                        updatedAsset.iec62443[frIndex].controls[controlIndex].status = newStatus;
-                        await updateDoc(assetRef, { iec62443: updatedAsset.iec62443, updatedAt: serverTimestamp() });
-                    } else {
-                        // controlPath is just the index for flat arrays
-                        const controlIndex = controlPath;
-                        updatedAsset[framework][controlIndex].status = newStatus;
-                        await updateDoc(assetRef, { [framework]: updatedAsset[framework], updatedAt: serverTimestamp() });
-                    }
-                    console.log(`Control status updated for asset ${assetId} (${framework}).`);
-                } catch (e) {
-                    console.error("Error updating control status: ", e);
-                }
-            };
-
-            const addTask = async (assetName, description, priority = 'Medium') => {
-                try {
-                    const taskRef = collection(db, `${PUBLIC_DATA_PATH}/remediationTasks`);
-                    await setDoc(doc(taskRef), {
-                        assetName,
-                        description,
-                        priority,
-                        status: 'Open',
-                        createdBy: userId,
-                        createdAt: serverTimestamp(),
-                    });
-                    console.log("Remediation Task added.");
-                } catch (e) {
-                    console.error("Error adding task: ", e);
-                }
-            };
-
-            const updateTaskStatus = async (taskId, newStatus) => {
-                try {
-                    const taskRef = doc(db, `${PUBLIC_DATA_PATH}/remediationTasks`, taskId);
-                    await updateDoc(taskRef, { status: newStatus, updatedAt: serverTimestamp() });
-                    console.log(`Task ${taskId} status updated to ${newStatus}.`);
-                } catch (e) {
-                    console.error("Error updating task status: ", e);
-                }
-            };
-            
-            const hasAccess = useCallback((requiredRoles) => requiredRoles.includes(userRole), [userRole]);
-
-            // --- UI RENDER LOGIC ---
-
-            if (firebaseError) {
-                return <ErrorState title="Critical Error" message={firebaseError} />;
+            } catch (error) {
+                updateState({ firebaseError: `Initialization failed: ${error.message}`, isAuthReady: true });
             }
-            
-            if (!isAuthReady) {
-                return <LoadingState />;
-            }
+        };
 
-            // --- CALCULATED VALUES ---
-            const totalControls = assets.reduce((sum, asset) => 
+        // --- DOM RENDERER FUNCTIONS ---
+
+        // Helper to convert object to HTML string
+        const createHTML = (tag, attrs = {}, children = []) => {
+            const attrStr = Object.entries(attrs).map(([key, value]) => {
+                if (key.startsWith('on') && typeof value === 'function') {
+                    // This is a simplified event handler placement (needs refinement for complex scenarios)
+                    // For simplicity in this demo, events are often attached manually after rendering.
+                    return '';
+                }
+                return `${key}="${value}"`;
+            }).join(' ');
+           
+            const content = Array.isArray(children) ? children.join('') : children;
+            return `<${tag} ${attrStr}>${content}</${tag}>`;
+        };
+
+        // --- UI COMPONENTS ---
+
+        const renderIcon = (name, classes = 'w-5 h-5') => `<i class="lucide ${name} ${classes}"></i>`;
+
+        const ProgressRing = (percentage, color = '#4F46E5', radius = 60, stroke = 10) => {
+            const normalizedRadius = radius - stroke * 2;
+            const circumference = normalizedRadius * 2 * Math.PI;
+            const strokeDashoffset = circumference - (percentage / 100) * circumference;
+
+            return `
+                <svg height="${radius * 2}" width="${radius * 2}" class="mx-auto">
+                    <circle stroke="#E0E7FF" fill="transparent" stroke-width="${stroke}" r="${normalizedRadius}" cx="${radius}" cy="${radius}" />
+                    <circle stroke="${color}" fill="transparent" stroke-width="${stroke}" stroke-dasharray="${circumference} ${circumference}" style="stroke-dashoffset: ${strokeDashoffset}" r="${normalizedRadius}" cx="${radius}" cy="${radius}" class="progress-ring__circle" />
+                    <text x="50%" y="50%" text-anchor="middle" dy=".3em" font-size="1.2em" font-weight="bold" fill="${color}">
+                        ${Math.round(percentage)}%
+                    </text>
+                </svg>
+            `;
+        };
+
+        const StatCard = (iconName, title, value, color) => createHTML('div', {
+            class: `p-5 rounded-xl shadow-lg flex flex-col justify-between transition-all duration-300 transform hover:scale-[1.01] bg-white border-l-4`,
+            style: `border-color: ${color}`
+        }, [
+            createHTML('div', { class: 'flex items-center space-x-4' }, [
+                createHTML('div', { class: 'p-3 rounded-full', style: `background-color: ${color}1A` }, [
+                    renderIcon(iconName, `w-6 h-6 text-[${color}]`)
+                ]),
+                createHTML('div', {}, [
+                    createHTML('p', { class: 'text-sm font-medium text-gray-500' }, title),
+                    createHTML('p', { class: 'text-3xl font-bold text-gray-900' }, value),
+                ]),
+            ]),
+        ]);
+
+        // --- VIEWS ---
+
+        const RiskDashboard = () => {
+            const totalControls = state.assets.reduce((sum, asset) =>
                 sum + (asset.iec62443?.reduce((cSum, fr) => cSum + (fr.controls?.length || 0), 0) || 0)
             , 0);
 
-            const implementedControls = assets.reduce((sum, asset) => 
-                sum + (asset.iec62443?.reduce((cSum, fr) => 
+            const implementedControls = state.assets.reduce((sum, asset) =>
+                sum + (asset.iec62443?.reduce((cSum, fr) =>
                     cSum + (fr.controls?.filter(c => c.status === 'Implemented').length || 0), 0) || 0)
             , 0);
 
             const overallCompliance = totalControls > 0 ? (implementedControls / totalControls) * 100 : 0;
-            const openTasks = tasks.filter(t => t.status !== 'Complete').length;
+            const openTasks = state.tasks.filter(t => t.status !== 'Complete').length;
+            const highRiskAssets = state.assets.filter(a => a.riskScore > 60).length;
 
-            const navItems = [
-                { view: 'riskDashboard', label: 'Risk Dashboard', icon: Shield, roles: ['admin', 'manager', 'engineer'] },
-                { view: 'managerDashboard', label: 'Manager Dashboard', icon: BarChart2, roles: ['admin', 'manager'] },
-                { view: 'assetBuilder', label: 'Asset Builder', icon: Cpu, roles: ['admin', 'engineer'] },
-                { view: 'securityControls', label: 'Controls', icon: CheckCircle, roles: ['admin', 'engineer'] },
-                { view: 'remediationTasks', label: 'Remediation Tasks', icon: HardHat, roles: ['admin', 'manager', 'engineer'] },
-                { view: 'reports', label: 'Reports', icon: FileText, roles: ['admin', 'manager'] },
-                { view: 'userGuide', label: 'User Guide', icon: BookOpen, roles: ['admin', 'manager', 'engineer'] },
-                { view: 'settings', label: 'Settings', icon: Settings, roles: ['admin'] },
-                { view: 'adminDashboard', label: 'Admin', icon: User, roles: ['admin'] },
-            ].filter(item => hasAccess(item.roles));
+            const content = [
+                createHTML('h1', { class: 'text-3xl font-extrabold text-gray-800 border-b pb-2' }, 'OT Security Risk Dashboard'),
+                createHTML('div', { class: 'grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6 mt-6' }, [
+                    StatCard('cpu', 'Total Assets', state.assets.length, '#3B82F6'),
+                    StatCard('alert-triangle', 'High Risk Assets', highRiskAssets, '#DC2626'),
+                    StatCard('hard-hat', 'Open Remediation Tasks', openTasks, '#F59E0B'),
+                    StatCard('target', 'Target SL Achieved (Mock)', Math.floor(Math.random() * 5), '#10B981'),
+                ]),
+                createHTML('div', { class: 'grid grid-cols-1 lg:grid-cols-3 gap-6 mt-6' }, [
+                    // Compliance Status Ring
+                    createHTML('div', { class: 'bg-white p-6 rounded-xl shadow-lg flex flex-col items-center justify-center' }, [
+                        createHTML('h2', { class: 'text-xl font-semibold text-indigo-700 mb-4' }, 'Overall IEC 62443 Compliance'),
+                        ProgressRing(overallCompliance),
+                        createHTML('p', { class: 'mt-4 text-center text-sm text-gray-600' }, `${implementedControls} / ${totalControls} Controls Implemented`),
+                    ]),
+                    // Risk Heatmap
+                    createHTML('div', { class: 'lg:col-span-2 bg-white p-6 rounded-xl shadow-lg' }, [
+                        createHTML('h2', { class: 'text-xl font-semibold text-indigo-700 mb-4' }, 'Risk Heatmap: Assets by Purdue Zone'),
+                        createHTML('p', { class: 'text-sm text-gray-500 mb-4' }, 'This visualization maps asset risk against the physical/logical network segmentation of the Purdue Model.'),
+                        '',
+                        createHTML('div', { class: 'grid grid-cols-2 sm:grid-cols-5 gap-4 mt-6' }, PURDUE_ZONES.map((zone, index) => {
+                            const count = state.assets.filter(a => a.zone === zone).length;
+                            const riskLevel = count > 3 ? 'bg-red-500' : count > 0 ? 'bg-yellow-500' : 'bg-green-500';
+                            return createHTML('div', { class: `${riskLevel} text-white p-3 rounded-lg text-center font-bold shadow-md` }, [
+                                createHTML('div', { class: 'text-xs font-light opacity-80' }, zone.split(': ')[0]),
+                                createHTML('div', { class: 'text-2xl' }, count),
+                            ]);
+                        })),
+                    ]),
+                ]),
+            ];
 
-            const renderView = () => {
-                switch (currentView) {
-                    case 'riskDashboard':
-                        return <RiskDashboard assets={assets} tasks={tasks} overallCompliance={overallCompliance} />;
-                    case 'managerDashboard':
-                        return <ManagerDashboard assets={assets} overallCompliance={overallCompliance} />;
-                    case 'assetBuilder':
-                        return <AssetBuilder assets={assets} addAsset={addAsset} openModal={setIsModalOpen} closeModal={setIsModalOpen} isModalOpen={isModalOpen} userId={userId} />;
-                    case 'securityControls':
-                        return <SecurityControls assets={assets} updateAssetControl={updateAssetControl} addTask={addTask} hasAccess={hasAccess(['admin', 'engineer'])} />;
-                    case 'remediationTasks':
-                        return <RemediationTasks tasks={tasks} updateTaskStatus={updateTaskStatus} hasAccess={hasAccess(['admin', 'engineer'])} />;
-                    case 'reports':
-                        return <Reports />;
-                    case 'settings':
-                        return <SettingsPage />;
-                    case 'adminDashboard':
-                        return <AdminDashboard userId={userId} appId={appId} />;
-                    case 'userGuide':
-                        return <UserGuide />;
-                    default:
-                        return <RiskDashboard assets={assets} tasks={tasks} overallCompliance={overallCompliance} />;
-                }
-            };
-            
-            // --- MAIN APPLICATION LAYOUT ---
-            return (
-                <div className="min-h-screen flex flex-col">
-                    {/* Header */}
-                    <header className="bg-indigo-800 text-white shadow-xl print-hide">
-                        <div className="container mx-auto px-4 py-3 flex justify-between items-center">
-                            <h1 className="text-2xl font-bold flex items-center">
-                                <Shield className="w-6 h-6 mr-2" />
-                                OT Guardian Security Posture Management
-                            </h1>
-                            <div className="flex items-center space-x-4">
-                                {/* Role Selector for Demonstration */}
-                                <div className="text-sm flex items-center bg-indigo-700 p-2 rounded-lg">
-                                    <span className="mr-2">View as:</span>
-                                    <select
-                                        value={userRole}
-                                        onChange={(e) => {
-                                            setUserRole(e.target.value);
-                                            setCurrentView('riskDashboard'); // Reset view on role change
-                                        }}
-                                        className="bg-indigo-600 text-white rounded-md p-1 font-semibold focus:ring-2 focus:ring-white"
-                                    >
-                                        <option value="admin">Admin</option>
-                                        <option value="manager">Manager</option>
-                                        <option value="engineer">Engineer</option>
-                                    </select>
-                                </div>
-                                <span className="text-sm font-medium hidden sm:inline">Current User: <code className="bg-indigo-700 px-2 py-1 rounded-md text-xs break-all">{userId}</code></span>
-                                <button 
-                                    onClick={() => console.log("Sign Out Placeholder")}
-                                    className="p-2 rounded-full bg-indigo-700 hover:bg-indigo-600 transition-colors shadow-lg" 
-                                    title="Sign Out (Placeholder)"
-                                >
-                                    <LogOut className='w-5 h-5' />
-                                </button>
-                            </div>
-                        </div>
-                    </header>
-
-                    <div className="flex-grow container mx-auto px-4 py-4 print-full">
-                        {/* Navigation Bar */}
-                        <nav className="flex space-x-1 p-3 rounded-xl bg-white shadow-lg print-hide overflow-x-auto whitespace-nowrap mb-6">
-                            {navItems.map(item => (
-                                <button
-                                    key={item.view}
-                                    onClick={() => setCurrentView(item.view)}
-                                    className={`flex items-center px-3 py-2 text-sm font-semibold rounded-lg transition-all duration-150 ${
-                                        currentView === item.view ? 'bg-indigo-700 text-white shadow-md' : 'text-gray-700 hover:bg-indigo-100'
-                                    }`}
-                                >
-                                    <item.icon className="w-4 h-4 mr-2" />
-                                    {item.label}
-                                </button>
-                            ))}
-                        </nav>
-
-                        {/* Main Content Area */}
-                        <main className="p-1 sm:p-4">
-                            {renderView()}
-                        </main>
-                    </div>
-                </div>
-            );
+            return createHTML('div', { class: 'space-y-8' }, content);
         };
+       
+        const ManagerDashboard = () => {
+            const riskScore = (10 - (overallCompliance() / 10)).toFixed(1);
 
-        // --- SUB-COMPONENTS & VIEWS ---
-
-        const StatCard = ({ icon: Icon, title, value, color, children }) => (
-            <div className="p-5 rounded-xl shadow-lg flex flex-col justify-between transition-all duration-300 transform hover:scale-[1.01] bg-white border-l-4" style={{ borderColor: color }}>
-                <div className="flex items-center space-x-4">
-                    <div className="p-3 rounded-full" style={{ backgroundColor: `${color}1A` }}>
-                        <Icon className="w-6 h-6" style={{ color: color }} />
-                    </div>
-                    <div>
-                        <p className="text-sm font-medium text-gray-500">{title}</p>
-                        <p className="text-3xl font-bold text-gray-900">{value}</p>
-                    </div>
-                </div>
-                {children && <div className="mt-3 text-sm text-gray-600">{children}</div>}
-            </div>
-        );
-        
-        // 5.1 Risk Dashboard
-        const RiskDashboard = ({ assets, tasks, overallCompliance }) => {
-            const highRiskAssets = assets.filter(a => a.riskScore > 60).length;
-            const openTasks = tasks.filter(t => t.status !== 'Complete').length;
-            const targetSLAchieved = Math.floor(Math.random() * 5); // Mock metric
-
-            return (
-                <div className="space-y-8">
-                    <h1 className="text-3xl font-extrabold text-gray-800 border-b pb-2">OT Security Risk Dashboard</h1>
-                    
-                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
-                        <StatCard icon={Cpu} title="Total Assets" value={assets.length} color="#3B82F6" />
-                        <StatCard icon={AlertTriangle} title="High Risk Assets" value={highRiskAssets} color="#DC2626" />
-                        <StatCard icon={HardHat} title="Open Remediation Tasks" value={openTasks} color="#F59E0B" />
-                        <StatCard icon={Target} title="Target SL Achieved" value={targetSLAchieved} color="#10B981" />
-                    </div>
-
-                    <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-                        {/* Compliance Status Ring */}
-                        <div className="bg-white p-6 rounded-xl shadow-lg flex flex-col items-center justify-center">
-                            <h2 className="text-xl font-semibold text-indigo-700 mb-4">Overall IEC 62443 Compliance</h2>
-                            <ProgressRing percentage={overallCompliance} />
-                            <p className="mt-4 text-center text-sm text-gray-600">
-                                {implementedControls} / {totalControls} Controls Implemented
-                            </p>
-                        </div>
-
-                        {/* Risk Heatmap: Purdue Zones */}
-                        <div className="lg:col-span-2 bg-white p-6 rounded-xl shadow-lg">
-                            <h2 className="text-xl font-semibold text-indigo-700 mb-4">Risk Heatmap: Assets by Purdue Zone</h2>
-                            <p className="text-sm text-gray-500 mb-4">
-                                This visualization maps asset risk against the physical/logical network segmentation of the Purdue Model.
-                            </p>
-                            
-                            
-
-                            <div className="grid grid-cols-2 sm:grid-cols-5 gap-4 mt-6">
-                                {PURDUE_ZONES.map((zone, index) => {
-                                    const count = assets.filter(a => a.zone === zone).length;
-                                    const riskLevel = count > 3 ? 'bg-red-500' : count > 0 ? 'bg-yellow-500' : 'bg-green-500';
-                                    return (
-                                        <div key={index} className={`${riskLevel} text-white p-3 rounded-lg text-center font-bold shadow-md`}>
-                                            <div className="text-xs font-light opacity-80">{zone.split(': ')[0]}</div>
-                                            <div className="text-2xl">{count}</div>
-                                        </div>
-                                    );
-                                })}
-                            </div>
-                        </div>
-                    </div>
-                </div>
-            );
-        };
-        
-        // 5.2 Manager Dashboard
-        const ManagerDashboard = ({ assets, overallCompliance }) => {
-            const riskScore = (10 - (overallCompliance / 10)).toFixed(1); // Inverse relationship to score
-            const frCompliance = useMemo(() => {
+            const frCompliance = (() => {
                 const frMap = {};
-                assets.forEach(asset => {
+                state.assets.forEach(asset => {
                     asset.iec62443?.forEach(fr => {
                         if (!frMap[fr.fr]) { frMap[fr.fr] = { total: 0, implemented: 0, name: fr.name }; }
                         frMap[fr.fr].total += fr.controls.length;
@@ -552,290 +392,314 @@
                     });
                 });
                 return Object.entries(frMap).map(([fr, data]) => ({
-                    fr, 
+                    fr,
                     name: data.name,
                     percentage: data.total > 0 ? (data.implemented / data.total) * 100 : 0,
                 }));
-            }, [assets]);
+            })();
 
-            return (
-                <div className="space-y-8">
-                    <h1 className="text-3xl font-extrabold text-gray-800 border-b pb-2">Executive Posture Overview</h1>
-                    
-                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-6">
-                        <StatCard icon={BarChart2} title="Mock Risk Score" value={`${riskScore} / 10`} color="#9333EA" />
-                        <StatCard icon={Shield} title="Overall Compliance" value={`${overallCompliance.toFixed(1)}%`} color="#10B981" />
-                        <StatCard icon={Target} title="Target SL (Mocked)" value="SL 3 / SL 4" color="#F97316" />
-                    </div>
+            const overallCompliance = () => {
+                 const totalControls = state.assets.reduce((sum, asset) =>
+                    sum + (asset.iec62443?.reduce((cSum, fr) => cSum + (fr.controls?.length || 0), 0) || 0)
+                , 0);
 
-                    <div className="bg-white p-6 rounded-xl shadow-lg">
-                        <h2 className="text-2xl font-semibold text-indigo-700 mb-4">IEC 62443 Foundational Requirement (FR) Coverage</h2>
-                        <p className="text-sm text-gray-500 mb-4">
-                            Progress for key Foundational Requirements based on asset-level control implementation.
-                        </p>
-                        
-                        
-
-                        <div className="space-y-4">
-                            {frCompliance.map(({ fr, name, percentage }) => (
-                                <div key={fr}>
-                                    <div className="flex justify-between text-sm font-medium text-gray-700 mb-1">
-                                        <span>{fr}: {name}</span>
-                                        <span className="font-bold">{percentage.toFixed(0)}%</span>
-                                    </div>
-                                    <div className="w-full bg-gray-200 rounded-full h-2.5">
-                                        <div 
-                                            className="h-2.5 rounded-full" 
-                                            style={{ width: `${percentage}%`, backgroundColor: percentage > 75 ? '#10B981' : percentage > 40 ? '#F59E0B' : '#DC2626' }}
-                                        ></div>
-                                    </div>
-                                </div>
-                            ))}
-                        </div>
-                    </div>
-                </div>
-            );
-        };
-
-        // 5.3 Asset Builder
-        const AssetBuilder = ({ assets, addAsset, openModal, closeModal, isModalOpen, userId }) => {
-            const [filter, setFilter] = useState('');
-            const [formData, setFormData] = useState({ name: '', type: 'PLC', zone: PURDUE_ZONES[0], impact: 'High' });
-
-            const filteredAssets = assets.filter(a => 
-                a.name.toLowerCase().includes(filter.toLowerCase()) || 
-                a.zone.toLowerCase().includes(filter.toLowerCase())
-            );
-
-            const handleFormChange = (e) => {
-                setFormData({ ...formData, [e.target.name]: e.target.value });
+                const implementedControls = state.assets.reduce((sum, asset) =>
+                    sum + (asset.iec62443?.reduce((cSum, fr) =>
+                        cSum + (fr.controls?.filter(c => c.status === 'Implemented').length || 0), 0) || 0)
+                , 0);
+                return totalControls > 0 ? (implementedControls / totalControls) * 100 : 0;
             };
 
-            const handleSubmit = async (e) => {
-                e.preventDefault();
-                await addAsset(formData);
-                setFormData({ name: '', type: 'PLC', zone: PURDUE_ZONES[0], impact: 'High' });
-                closeModal(false);
-            };
+            const frBars = frCompliance.map(({ fr, name, percentage }) => {
+                const color = percentage > 75 ? '#10B981' : percentage > 40 ? '#F59E0B' : '#DC2626';
+                return createHTML('div', { key: fr }, [
+                    createHTML('div', { class: 'flex justify-between text-sm font-medium text-gray-700 mb-1' }, [
+                        createHTML('span', {}, `${fr}: ${name}`),
+                        createHTML('span', { class: 'font-bold' }, `${percentage.toFixed(0)}%`),
+                    ]),
+                    createHTML('div', { class: 'w-full bg-gray-200 rounded-full h-2.5' }, [
+                        createHTML('div', {
+                            class: 'h-2.5 rounded-full',
+                            style: `width: ${percentage}%; background-color: ${color}`
+                        }),
+                    ]),
+                ]);
+            });
 
-            const AssetTable = ({ assetList }) => (
-                <div className="bg-white rounded-xl shadow-lg overflow-x-auto table-responsive">
-                    <table className="min-w-full divide-y divide-gray-200">
-                        <thead className="bg-gray-50">
-                            <tr>
-                                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Name</th>
-                                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Type</th>
-                                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Purdue Zone</th>
-                                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Impact</th>
-                                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Risk Score</th>
-                            </tr>
-                        </thead>
-                        <tbody className="bg-white divide-y divide-gray-200">
-                            {assetList.map(asset => (
-                                <tr key={asset.id} className="hover:bg-indigo-50 transition-colors">
-                                    <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">{asset.name || 'N/A'}</td>
-                                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{asset.type || 'N/A'}</td>
-                                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{asset.zone || 'N/A'}</td>
-                                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{asset.impact || 'N/A'}</td>
-                                    <td className="px-6 py-4 whitespace-nowrap text-sm font-bold text-indigo-600">{asset.riskScore || 'N/A'}</td>
-                                </tr>
-                            ))}
-                        </tbody>
-                    </table>
-                </div>
-            );
-
-            const AssetModal = () => (
-                <div className="fixed inset-0 bg-gray-900 bg-opacity-75 flex items-center justify-center z-50 p-4 print-hide">
-                    <div className="bg-white rounded-xl shadow-2xl max-w-lg w-full max-h-full overflow-y-auto">
-                        <div className="flex justify-between items-center p-4 border-b">
-                            <h3 className="text-xl font-bold text-gray-800">Add New OT Asset</h3>
-                            <button onClick={() => closeModal(false)} className="text-gray-400 hover:text-gray-600 p-1 rounded-full hover:bg-gray-100"><X className="w-6 h-6" /></button>
-                        </div>
-                        <form onSubmit={handleSubmit} className="p-6 space-y-4">
-                            <div><label className="block text-sm font-medium text-gray-700">Name</label><input type="text" name="name" value={formData.name} onChange={handleFormChange} required className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-lg shadow-sm" /></div>
-                            <div>
-                                <label className="block text-sm font-medium text-gray-700">Type</label>
-                                <select name="type" value={formData.type} onChange={handleFormChange} className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-lg shadow-sm">
-                                    {['PLC', 'HMI', 'Server', 'Historian', 'Workstation'].map(t => <option key={t} value={t}>{t}</option>)}
-                                </select>
-                            </div>
-                            <div>
-                                <label className="block text-sm font-medium text-gray-700">Zone</label>
-                                <select name="zone" value={formData.zone} onChange={handleFormChange} className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-lg shadow-sm">
-                                    {PURDUE_ZONES.map(z => <option key={z} value={z}>{z}</option>)}
-                                </select>
-                            </div>
-                            <div>
-                                <label className="block text-sm font-medium text-gray-700">Impact</label>
-                                <select name="impact" value={formData.impact} onChange={handleFormChange} className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-lg shadow-sm">
-                                    {['High', 'Medium', 'Low'].map(i => <option key={i} value={i}>{i}</option>)}
-                                </select>
-                            </div>
-                            <div className="flex justify-end pt-4"><button type="submit" className="flex items-center bg-indigo-600 text-white px-4 py-2 rounded-xl font-semibold hover:bg-indigo-700"><Save className="w-5 h-5 mr-2" /> Add Asset</button></div>
-                        </form>
-                    </div>
-                </div>
-            );
-
-            return (
-                <div className="space-y-6">
-                    <div className="flex flex-col sm:flex-row justify-between items-center border-b pb-4">
-                        <h1 className="text-3xl font-extrabold text-gray-800 mb-3 sm:mb-0">Asset Inventory ({assets.length})</h1>
-                        <div className="flex space-x-3 w-full sm:w-auto">
-                            <input type="text" placeholder="Filter by Name or Zone..." value={filter} onChange={(e) => setFilter(e.target.value)} className="px-3 py-2 border border-gray-300 rounded-xl shadow-sm w-full sm:w-64" />
-                            <button 
-                                onClick={() => openModal(true)}
-                                className="flex items-center bg-indigo-600 text-white px-4 py-2 rounded-xl font-semibold shadow-md hover:bg-indigo-700 transition-colors"
-                            >
-                                <Plus className="w-5 h-5 mr-2" /> Add Asset
-                            </button>
-                        </div>
-                    </div>
-                    <AssetTable assetList={filteredAssets} />
-                    {isModalOpen && <AssetModal />}
-                </div>
-            );
+            const content = [
+                createHTML('h1', { class: 'text-3xl font-extrabold text-gray-800 border-b pb-2' }, 'Executive Posture Overview'),
+                createHTML('div', { class: 'grid grid-cols-1 sm:grid-cols-3 gap-6 mt-6' }, [
+                    StatCard('bar-chart-2', 'Mock Risk Score', `${riskScore} / 10`, '#9333EA'),
+                    StatCard('shield', 'Overall Compliance', `${overallCompliance().toFixed(1)}%`, '#10B981'),
+                    StatCard('target', 'Target SL (Mocked)', 'SL 3 / SL 4', '#F97316'),
+                ]),
+                createHTML('div', { class: 'bg-white p-6 rounded-xl shadow-lg mt-6' }, [
+                    createHTML('h2', { class: 'text-2xl font-semibold text-indigo-700 mb-4' }, 'IEC 62443 Foundational Requirement (FR) Coverage'),
+                    createHTML('p', { class: 'text-sm text-gray-500 mb-4' }, 'Progress for key Foundational Requirements based on asset-level control implementation.'),
+                    '',
+                    createHTML('div', { class: 'space-y-4' }, frBars),
+                ]),
+            ];
+            return createHTML('div', { class: 'space-y-8' }, content);
         };
 
-        // 5.4 Security Controls
-        const SecurityControls = ({ assets, updateAssetControl, addTask, hasAccess }) => {
-            const [selectedAssetId, setSelectedAssetId] = useState(assets[0]?.id || '');
-            const [selectedFramework, setSelectedFramework] = useState('iec62443');
-            const asset = assets.find(a => a.id === selectedAssetId);
-            
-            useEffect(() => {
-                if (assets.length > 0 && !selectedAssetId) {
-                    setSelectedAssetId(assets[0].id);
-                }
-            }, [assets, selectedAssetId]);
+        const AssetBuilder = () => {
+            const AssetModal = () => {
+                const formId = 'asset-builder-form';
+                const modalHtml = createHTML('div', { id: 'asset-modal', class: 'fixed inset-0 bg-gray-900 bg-opacity-75 flex items-center justify-center z-50 p-4 print-hide' }, [
+                    createHTML('div', { class: 'bg-white rounded-xl shadow-2xl max-w-lg w-full max-h-full overflow-y-auto' }, [
+                        createHTML('div', { class: 'flex justify-between items-center p-4 border-b' }, [
+                            createHTML('h3', { class: 'text-xl font-bold text-gray-800' }, 'Add New OT Asset'),
+                            createHTML('button', { id: 'close-modal-btn', class: 'text-gray-400 hover:text-gray-600 p-1 rounded-full hover:bg-gray-100' }, renderIcon('x', 'w-6 h-6')),
+                        ]),
+                        createHTML('form', { id: formId, class: 'p-6 space-y-4' }, [
+                            createHTML('div', {}, [
+                                createHTML('label', { class: 'block text-sm font-medium text-gray-700' }, 'Name'),
+                                createHTML('input', { type: 'text', name: 'name', required: true, class: 'mt-1 block w-full px-3 py-2 border border-gray-300 rounded-lg shadow-sm' }),
+                            ]),
+                            createHTML('div', {}, [
+                                createHTML('label', { class: 'block text-sm font-medium text-gray-700' }, 'Type'),
+                                createHTML('select', { name: 'type', class: 'mt-1 block w-full px-3 py-2 border border-gray-300 rounded-lg shadow-sm' },
+                                    ['PLC', 'HMI', 'Server', 'Historian', 'Workstation'].map(t => createHTML('option', { value: t }, t))
+                                ),
+                            ]),
+                            createHTML('div', {}, [
+                                createHTML('label', { class: 'block text-sm font-medium text-gray-700' }, 'Zone'),
+                                createHTML('select', { name: 'zone', class: 'mt-1 block w-full px-3 py-2 border border-gray-300 rounded-lg shadow-sm' },
+                                    PURDUE_ZONES.map(z => createHTML('option', { value: z }, z))
+                                ),
+                            ]),
+                            createHTML('div', {}, [
+                                createHTML('label', { class: 'block text-sm font-medium text-gray-700' }, 'Impact'),
+                                createHTML('select', { name: 'impact', class: 'mt-1 block w-full px-3 py-2 border border-gray-300 rounded-lg shadow-sm' },
+                                    ['High', 'Medium', 'Low'].map(i => createHTML('option', { value: i }, i))
+                                ),
+                            ]),
+                            createHTML('div', { class: 'flex justify-end pt-4' }, [
+                                createHTML('button', { type: 'submit', class: 'flex items-center bg-indigo-600 text-white px-4 py-2 rounded-xl font-semibold hover:bg-indigo-700' }, [
+                                    renderIcon('save', 'w-5 h-5 mr-2'), ' Add Asset'
+                                ]),
+                            ]),
+                        ]),
+                    ]),
+                ]);
+
+                // Render Modal and attach handlers
+                const root = document.getElementById('root');
+                const modalContainer = document.createElement('div');
+                modalContainer.innerHTML = modalHtml;
+                root.appendChild(modalContainer);
+
+                const closeModal = () => {
+                    updateState({ isModalOpen: false });
+                    modalContainer.remove();
+                };
+
+                document.getElementById('close-modal-btn').onclick = closeModal;
+                document.getElementById(formId).onsubmit = async (e) => {
+                    e.preventDefault();
+                    const formData = {
+                        name: e.target.elements.name.value,
+                        type: e.target.elements.type.value,
+                        zone: e.target.elements.zone.value,
+                        impact: e.target.elements.impact.value,
+                    };
+                    await addAsset(formData);
+                    closeModal();
+                };
+            };
+           
+            if (state.isModalOpen) { AssetModal(); }
+
+            const filteredAssets = state.assets.filter(a =>
+                a.name.toLowerCase().includes(state.assetFilter?.toLowerCase() || '') ||
+                a.zone.toLowerCase().includes(state.assetFilter?.toLowerCase() || '')
+            );
+
+            const tableRows = filteredAssets.map(asset => createHTML('tr', { key: asset.id, class: 'hover:bg-indigo-50 transition-colors' }, [
+                createHTML('td', { class: 'px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900' }, asset.name || 'N/A'),
+                createHTML('td', { class: 'px-6 py-4 whitespace-nowrap text-sm text-gray-500' }, asset.type || 'N/A'),
+                createHTML('td', { class: 'px-6 py-4 whitespace-nowrap text-sm text-gray-500' }, asset.zone || 'N/A'),
+                createHTML('td', { class: 'px-6 py-4 whitespace-nowrap text-sm text-gray-500' }, asset.impact || 'N/A'),
+                createHTML('td', { class: 'px-6 py-4 whitespace-nowrap text-sm font-bold text-indigo-600' }, asset.riskScore || 'N/A'),
+            ]));
+
+            const content = [
+                createHTML('div', { class: 'flex flex-col sm:flex-row justify-between items-center border-b pb-4' }, [
+                    createHTML('h1', { class: 'text-3xl font-extrabold text-gray-800 mb-3 sm:mb-0' }, `Asset Inventory (${state.assets.length})`),
+                    createHTML('div', { class: 'flex space-x-3 w-full sm:w-auto' }, [
+                        createHTML('input', { id: 'asset-filter', type: 'text', placeholder: 'Filter by Name or Zone...', value: state.assetFilter || '', class: 'px-3 py-2 border border-gray-300 rounded-xl shadow-sm w-full sm:w-64' }),
+                        createHTML('button', { id: 'add-asset-btn', class: 'flex items-center bg-indigo-600 text-white px-4 py-2 rounded-xl font-semibold shadow-md hover:bg-indigo-700 transition-colors' }, [
+                            renderIcon('plus', 'w-5 h-5 mr-2'), ' Add Asset'
+                        ]),
+                    ]),
+                ]),
+                createHTML('div', { class: 'bg-white rounded-xl shadow-lg overflow-x-auto table-responsive' }, [
+                    createHTML('table', { class: 'min-w-full divide-y divide-gray-200' }, [
+                        createHTML('thead', { class: 'bg-gray-50' }, [
+                            createHTML('tr', {}, [
+                                ['Name', 'Type', 'Purdue Zone', 'Impact', 'Risk Score'].map(h => createHTML('th', { class: 'px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider' }, h))
+                            ]),
+                        ]),
+                        createHTML('tbody', { class: 'bg-white divide-y divide-gray-200' }, tableRows),
+                    ]),
+                ]),
+            ];
+
+            const container = createHTML('div', { class: 'space-y-6' }, content);
+           
+            // Post-render event listeners
+            setTimeout(() => {
+                document.getElementById('add-asset-btn').onclick = () => updateState({ isModalOpen: true });
+                document.getElementById('asset-filter').oninput = (e) => updateState({ assetFilter: e.target.value });
+            }, 0);
+
+            return container;
+        };
+       
+        const SecurityControls = () => {
+            // Need selectedAssetId and selectedFramework state management
+            if (!state.selectedAssetId && state.assets.length > 0) {
+                updateState({ selectedAssetId: state.assets[0].id });
+            }
+            if (!state.selectedFramework) {
+                updateState({ selectedFramework: 'iec62443' });
+            }
+
+            const asset = state.assets.find(a => a.id === state.selectedAssetId);
+           
+            if (!asset) {
+                return createHTML('div', { class: 'p-6 text-gray-500 bg-white rounded-xl shadow-lg' }, 'Select an asset to begin assessment.');
+            }
 
             const frameworks = {
-                iec62443: { name: 'IEC 62443', data: asset?.iec62443 },
-                sans: { name: 'SANS Critical Controls', data: asset?.sans },
-                ciFortify: { name: 'CIS Fortify', data: asset?.ciFortify },
+                iec62443: { name: 'IEC 62443', data: asset.iec62443 },
+                sans: { name: 'SANS Critical Controls', data: asset.sans },
+                ciFortify: { name: 'CIS Fortify', data: asset.ciFortify },
             };
-            const currentFramework = frameworks[selectedFramework];
+            const currentFramework = frameworks[state.selectedFramework];
 
-            const ControlStatusToggle = ({ control, frIndex, controlIndex, isIEC }) => {
+            const renderControlStatusToggle = (control, frIndex, controlIndex, isIEC) => {
                 const isGap = control.status === 'Not Implemented' || control.status === 'Partially Implemented';
-                
-                const handleStatusChange = (e) => {
-                    const newStatus = e.target.value;
-                    let controlPath;
-                    if (isIEC) {
-                        controlPath = [frIndex, controlIndex];
-                    } else {
-                        controlPath = controlIndex;
-                    }
-                    updateAssetControl(selectedAssetId, selectedFramework, controlPath, newStatus);
-                };
-                
-                const handleCreateTask = () => {
-                    const taskDescription = isIEC 
-                        ? `Remediate gap in ${asset.name} (IEC ${control.cid}: ${control.requirement})`
-                        : `Remediate gap in ${asset.name} (${control.id}: ${control.name})`;
-                    
-                    addTask(asset.name, taskDescription, 'High'); // Default to high priority for new gaps
+                const hasEditAccess = hasAccess(['admin', 'engineer']);
+                const statusClasses = (status) => {
+                    if (status === 'Implemented') return 'bg-green-50 border-green-300 text-green-800';
+                    if (status === 'Not Implemented' || status === 'Partially Implemented') return 'bg-red-50 border-red-300 text-red-800';
+                    return 'bg-gray-50 border-gray-300';
                 };
 
-                return (
-                    <div className="flex items-center space-x-3">
-                        <select 
-                            value={control.status}
-                            onChange={handleStatusChange}
-                            disabled={!hasAccess}
-                            className={`px-3 py-1 text-sm rounded-lg border focus:ring-indigo-500 focus:border-indigo-500 ${
-                                isGap ? 'bg-red-50 border-red-300 text-red-800' : 
-                                control.status === 'Implemented' ? 'bg-green-50 border-green-300 text-green-800' : 'bg-gray-50 border-gray-300'
-                            }`}
-                        >
-                            {CONTROL_STATUSES.map(status => <option key={status} value={status}>{status}</option>)}
-                        </select>
-                        {isGap && hasAccess && (
-                            <button onClick={handleCreateTask} className="flex items-center text-xs bg-red-600 text-white px-2 py-1 rounded-full hover:bg-red-700 transition-colors">
-                                <Plus className="w-3 h-3 mr-1" /> Task
-                            </button>
-                        )}
-                    </div>
-                );
+                const selectId = `control-status-${asset.id}-${control.cid || control.id}-${frIndex}-${controlIndex}`;
+                const taskBtnId = `task-btn-${asset.id}-${control.cid || control.id}-${frIndex}-${controlIndex}`;
+               
+                // HTML structure for the control interaction area
+                const html = createHTML('div', { class: 'flex items-center space-x-3' }, [
+                    createHTML('select', {
+                        id: selectId,
+                        class: `px-3 py-1 text-sm rounded-lg border focus:ring-indigo-500 focus:border-indigo-500 ${statusClasses(control.status)}`,
+                        disabled: !hasEditAccess,
+                    }, CONTROL_STATUSES.map(s => createHTML('option', { value: s, selected: s === control.status }, s))),
+                    isGap && hasEditAccess ? createHTML('button', { id: taskBtnId, class: 'flex items-center text-xs bg-red-600 text-white px-2 py-1 rounded-full hover:bg-red-700 transition-colors' }, [
+                        renderIcon('plus', 'w-3 h-3 mr-1'), ' Task'
+                    ]) : ''
+                ]);
+
+                // Post-render event attachment (must be done after element is added to DOM)
+                setTimeout(() => {
+                    const selectElement = document.getElementById(selectId);
+                    if (selectElement) {
+                        selectElement.onchange = (e) => {
+                            let controlPath = isIEC ? [frIndex, controlIndex] : controlIndex;
+                            updateAssetControl(asset.id, state.selectedFramework, controlPath, e.target.value);
+                        };
+                    }
+
+                    const taskButton = document.getElementById(taskBtnId);
+                    if (taskButton) {
+                        taskButton.onclick = () => {
+                            const taskDescription = isIEC
+                                ? `Remediate gap in ${asset.name} (IEC ${control.cid}: ${control.requirement})`
+                                : `Remediate gap in ${asset.name} (${control.id}: ${control.name})`;
+                            addTask(asset.name, taskDescription, 'High');
+                        };
+                    }
+                }, 0);
+               
+                return html;
             };
 
-            const IECControlsDisplay = () => (
-                <div className="space-y-6">
-                    {currentFramework.data.map((fr, frIndex) => (
-                        <div key={fr.fr} className="bg-white p-5 rounded-xl shadow-lg border-l-4 border-indigo-500">
-                            <h3 className="text-xl font-bold text-indigo-700 mb-3">{fr.fr}: {fr.name} (Target SL: {fr.targetSL})</h3>
-                            <div className="divide-y divide-gray-100">
-                                {fr.controls.map((control, controlIndex) => (
-                                    <div key={control.cid} className="flex justify-between items-center py-3">
-                                        <div className="w-3/5">
-                                            <p className="font-semibold text-gray-800">{control.cid}</p>
-                                            <p className="text-sm text-gray-600">{control.requirement}</p>
-                                        </div>
-                                        <div className="w-2/5 flex justify-end">
-                                            <ControlStatusToggle control={control} frIndex={frIndex} controlIndex={controlIndex} isIEC={true} />
-                                        </div>
-                                    </div>
-                                ))}
-                            </div>
-                        </div>
-                    ))}
-                </div>
-            );
+            const IECControlsDisplay = () => {
+                return currentFramework.data.map((fr, frIndex) => createHTML('div', { key: fr.fr, class: 'bg-white p-5 rounded-xl shadow-lg border-l-4 border-indigo-500' }, [
+                    createHTML('h3', { class: 'text-xl font-bold text-indigo-700 mb-3' }, `${fr.fr}: ${fr.name} (Target SL: ${fr.targetSL})`),
+                    createHTML('div', { class: 'divide-y divide-gray-100' },
+                        fr.controls.map((control, controlIndex) => createHTML('div', { key: control.cid, class: 'flex justify-between items-center py-3' }, [
+                            createHTML('div', { class: 'w-3/5' }, [
+                                createHTML('p', { class: 'font-semibold text-gray-800' }, control.cid),
+                                createHTML('p', { class: 'text-sm text-gray-600' }, control.requirement),
+                            ]),
+                            createHTML('div', { class: 'w-2/5 flex justify-end' }, renderControlStatusToggle(control, frIndex, controlIndex, true)),
+                        ]))
+                    ),
+                ]));
+            };
 
-            const FlatControlsDisplay = () => (
-                <div className="bg-white rounded-xl shadow-lg overflow-x-auto">
-                    <table className="min-w-full divide-y divide-gray-200">
-                        <thead className="bg-gray-50"><tr><th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Control</th><th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Description</th><th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase">Status</th></tr></thead>
-                        <tbody className="bg-white divide-y divide-gray-200">
-                            {currentFramework.data.map((control, controlIndex) => (
-                                <tr key={control.id} className="hover:bg-gray-50">
-                                    <td className="px-6 py-4 text-sm font-medium text-gray-900">{control.id}</td>
-                                    <td className="px-6 py-4 text-sm text-gray-500">{control.description}</td>
-                                    <td className="px-6 py-4 text-right">
-                                        <ControlStatusToggle control={control} controlIndex={controlIndex} isIEC={false} />
-                                    </td>
-                                </tr>
-                            ))}
-                        </tbody>
-                    </table>
-                </div>
-            );
-            
-            if (assets.length === 0) return <div className="p-6 text-gray-500 bg-white rounded-xl shadow-lg">Please add assets in the Asset Builder first.</div>;
+            const FlatControlsDisplay = () => {
+                const tableRows = currentFramework.data.map((control, controlIndex) => createHTML('tr', { key: control.id, class: 'hover:bg-gray-50' }, [
+                    createHTML('td', { class: 'px-6 py-4 text-sm font-medium text-gray-900' }, control.id),
+                    createHTML('td', { class: 'px-6 py-4 text-sm text-gray-500' }, control.description),
+                    createHTML('td', { class: 'px-6 py-4 text-right' }, renderControlStatusToggle(control, null, controlIndex, false)),
+                ]));
 
-            return (
-                <div className="space-y-6">
-                    <h1 className="text-3xl font-extrabold text-gray-800 border-b pb-2">Security Control Assessment</h1>
-                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 bg-white p-4 rounded-xl shadow-md print-hide">
-                        <div>
-                            <label className="block text-sm font-medium text-gray-700">Select Asset</label>
-                            <select value={selectedAssetId} onChange={(e) => setSelectedAssetId(e.target.value)} className="mt-1 block w-full px-3 py-2 border rounded-lg shadow-sm">
-                                {assets.map(a => <option key={a.id} value={a.id}>{a.name} ({a.zone.split(': ')[0]})</option>)}
-                            </select>
-                        </div>
-                        <div>
-                            <label className="block text-sm font-medium text-gray-700">Select Framework</label>
-                            <select value={selectedFramework} onChange={(e) => setSelectedFramework(e.target.value)} className="mt-1 block w-full px-3 py-2 border rounded-lg shadow-sm">
-                                {Object.keys(frameworks).map(key => <option key={key} value={key}>{frameworks[key].name}</option>)}
-                            </select>
-                        </div>
-                    </div>
-                    
-                    {asset && (
-                        <div className="mt-6">
-                            <h2 className="text-2xl font-bold text-gray-800 mb-4">{currentFramework.name} Controls for: {asset.name}</h2>
-                            {selectedFramework === 'iec62443' ? <IECControlsDisplay /> : (currentFramework.data && <FlatControlsDisplay />)}
-                        </div>
-                    )}
-                    {!asset && <div className="p-6 text-gray-500 bg-white rounded-xl shadow-lg">Select an asset to begin assessment.</div>}
-                </div>
-            );
+                return createHTML('div', { class: 'bg-white rounded-xl shadow-lg overflow-x-auto' }, [
+                    createHTML('table', { class: 'min-w-full divide-y divide-gray-200' }, [
+                        createHTML('thead', { class: 'bg-gray-50' }, [
+                            createHTML('tr', {}, [
+                                ['Control', 'Description', 'Status'].map(h => createHTML('th', { class: 'px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase' }, h))
+                            ]),
+                        ]),
+                        createHTML('tbody', { class: 'bg-white divide-y divide-gray-200' }, tableRows),
+                    ]),
+                ]);
+            };
+
+            const content = [
+                createHTML('h1', { class: 'text-3xl font-extrabold text-gray-800 border-b pb-2' }, 'Security Control Assessment'),
+                createHTML('div', { class: 'grid grid-cols-1 sm:grid-cols-3 gap-4 bg-white p-4 rounded-xl shadow-md print-hide' }, [
+                    createHTML('div', {}, [
+                        createHTML('label', { class: 'block text-sm font-medium text-gray-700' }, 'Select Asset'),
+                        createHTML('select', { id: 'asset-select', class: 'mt-1 block w-full px-3 py-2 border rounded-lg shadow-sm' },
+                            state.assets.map(a => createHTML('option', { value: a.id, selected: a.id === state.selectedAssetId }, `${a.name} (${a.zone.split(': ')[0]})`))
+                        ),
+                    ]),
+                    createHTML('div', {}, [
+                        createHTML('label', { class: 'block text-sm font-medium text-gray-700' }, 'Select Framework'),
+                        createHTML('select', { id: 'framework-select', class: 'mt-1 block w-full px-3 py-2 border rounded-lg shadow-sm' },
+                            Object.keys(frameworks).map(key => createHTML('option', { value: key, selected: key === state.selectedFramework }, frameworks[key].name))
+                        ),
+                    ]),
+                ]),
+                asset ? createHTML('div', { class: 'mt-6' }, [
+                    createHTML('h2', { class: 'text-2xl font-bold text-gray-800 mb-4' }, `${currentFramework.name} Controls for: ${asset.name}`),
+                    state.selectedFramework === 'iec62443' ? createHTML('div', { class: 'space-y-6' }, IECControlsDisplay()) : FlatControlsDisplay(),
+                ]) : '',
+            ];
+
+            const container = createHTML('div', { class: 'space-y-6' }, content);
+
+            // Post-render event listeners
+            setTimeout(() => {
+                const assetSelect = document.getElementById('asset-select');
+                if (assetSelect) { assetSelect.onchange = (e) => updateState({ selectedAssetId: e.target.value }); }
+
+                const frameworkSelect = document.getElementById('framework-select');
+                if (frameworkSelect) { frameworkSelect.onchange = (e) => updateState({ selectedFramework: e.target.value }); }
+            }, 0);
+
+            return container;
         };
-
-        // 5.5 Remediation Tasks
-        const RemediationTasks = ({ tasks, updateTaskStatus, hasAccess }) => {
+       
+        const RemediationTasks = () => {
+            const hasEditAccess = hasAccess(['admin', 'engineer']);
+           
             const getPriorityClass = (priority) => {
                 switch (priority) {
                     case 'Critical': return 'bg-red-500';
@@ -845,7 +709,7 @@
                     default: return 'bg-gray-400';
                 }
             };
-            
+           
             const getStatusClass = (status) => {
                 switch (status) {
                     case 'Open': return 'bg-red-100 text-red-800';
@@ -854,184 +718,234 @@
                     default: return 'bg-gray-100 text-gray-800';
                 }
             };
+           
+            const tableRows = state.tasks.map(task => {
+                const selectId = `task-status-${task.id}`;
+               
+                const html = createHTML('tr', { key: task.id, class: 'hover:bg-indigo-50 transition-colors' }, [
+                    createHTML('td', { class: 'px-6 py-4 whitespace-nowrap' },
+                        createHTML('span', { class: `px-2 py-0.5 text-xs font-semibold rounded-full text-white ${getPriorityClass(task.priority)}` }, task.priority || 'N/A')
+                    ),
+                    createHTML('td', { class: 'px-6 py-4 text-sm text-gray-900' }, task.description || 'N/A'),
+                    createHTML('td', { class: 'px-6 py-4 text-sm text-indigo-600 font-medium' }, task.assetName || 'N/A'),
+                    createHTML('td', { class: 'px-6 py-4 whitespace-nowrap' },
+                        hasEditAccess ? createHTML('select', { id: selectId, class: `px-3 py-1 text-sm rounded-lg border focus:ring-indigo-500 focus:border-indigo-500 ${getStatusClass(task.status)}` },
+                            ['Open', 'In Progress', 'Complete'].map(s => createHTML('option', { value: s, selected: s === task.status }, s))
+                        ) : createHTML('span', { class: `px-3 py-1 inline-flex text-xs leading-5 font-semibold rounded-full ${getStatusClass(task.status)}` }, task.status)
+                    ),
+                    createHTML('td', { class: 'px-6 py-4 text-sm text-gray-500' }, MOCK_USERS.find(u => u.uid === task.createdBy)?.role || 'N/A'),
+                ]);
 
-            const TaskTable = ({ taskList }) => (
-                <div className="bg-white rounded-xl shadow-lg overflow-x-auto table-responsive">
-                    <table className="min-w-full divide-y divide-gray-200">
-                        <thead className="bg-gray-50">
-                            <tr>
-                                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Priority</th>
-                                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Description</th>
-                                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Asset Name</th>
-                                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Status</th>
-                                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Created By</th>
-                            </tr>
-                        </thead>
-                        <tbody className="bg-white divide-y divide-gray-200">
-                            {taskList.map(task => (
-                                <tr key={task.id} className="hover:bg-indigo-50 transition-colors">
-                                    <td className="px-6 py-4 whitespace-nowrap">
-                                        <span className={`px-2 py-0.5 text-xs font-semibold rounded-full text-white ${getPriorityClass(task.priority)}`}>
-                                            {task.priority || 'N/A'}
-                                        </span>
-                                    </td>
-                                    <td className="px-6 py-4 text-sm text-gray-900">{task.description || 'N/A'}</td>
-                                    <td className="px-6 py-4 text-sm text-indigo-600 font-medium">{task.assetName || 'N/A'}</td>
-                                    <td className="px-6 py-4 whitespace-nowrap">
-                                        {hasAccess ? (
-                                            <select 
-                                                value={task.status} 
-                                                onChange={(e) => updateTaskStatus(task.id, e.target.value)}
-                                                className={`px-3 py-1 text-sm rounded-lg border focus:ring-indigo-500 focus:border-indigo-500 ${getStatusClass(task.status)}`}
-                                            >
-                                                {['Open', 'In Progress', 'Complete'].map(s => <option key={s} value={s}>{s}</option>)}
-                                            </select>
-                                        ) : (
-                                            <span className={`px-3 py-1 inline-flex text-xs leading-5 font-semibold rounded-full ${getStatusClass(task.status)}`}>
-                                                {task.status}
-                                            </span>
-                                        )}
-                                    </td>
-                                    <td className="px-6 py-4 text-sm text-gray-500">{MOCK_USERS.find(u => u.uid === task.createdBy)?.role || 'N/A'}</td>
-                                </tr>
-                            ))}
-                        </tbody>
-                    </table>
-                </div>
-            );
+                if (hasEditAccess) {
+                    setTimeout(() => {
+                        const selectElement = document.getElementById(selectId);
+                        if (selectElement) { selectElement.onchange = (e) => updateTaskStatus(task.id, e.target.value); }
+                    }, 0);
+                }
+                return html;
+            });
 
-            return (
-                <div className="space-y-6">
-                    <h1 className="text-3xl font-extrabold text-gray-800 border-b pb-2">Remediation Task Management</h1>
-                    <TaskTable taskList={tasks} />
-                </div>
-            );
+            const content = [
+                createHTML('h1', { class: 'text-3xl font-extrabold text-gray-800 border-b pb-2' }, 'Remediation Task Management'),
+                createHTML('div', { class: 'bg-white rounded-xl shadow-lg overflow-x-auto table-responsive mt-6' }, [
+                    createHTML('table', { class: 'min-w-full divide-y divide-gray-200' }, [
+                        createHTML('thead', { class: 'bg-gray-50' }, [
+                            createHTML('tr', {}, [
+                                ['Priority', 'Description', 'Asset Name', 'Status', 'Created By'].map(h => createHTML('th', { class: 'px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider' }, h))
+                            ]),
+                        ]),
+                        createHTML('tbody', { class: 'bg-white divide-y divide-gray-200' }, tableRows),
+                    ]),
+                ]),
+            ];
+
+            return createHTML('div', { class: 'space-y-6' }, content);
         };
-        
-        // 5.6 Reports
-        const Reports = () => (
-            <div className="space-y-6 bg-white p-6 rounded-xl shadow-lg">
-                <h1 className="text-3xl font-extrabold text-gray-800 border-b pb-2">Reporting & Export</h1>
-                <p className="text-gray-600">
-                    Generate comprehensive reports on compliance, risk scores, and remediation status. For demonstration, you can use the browser's print/PDF feature on the main dashboards.
-                </p>
-                
-                <div className="p-4 border border-indigo-200 rounded-xl space-y-4">
-                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-                        <div>
-                            <label className="block text-sm font-medium text-gray-700">Report Type</label>
-                            <select disabled className="mt-1 block w-full px-3 py-2 border rounded-lg shadow-sm bg-gray-50">
-                                <option>Executive Summary</option>
-                                <option>IEC 62443 Compliance Detail</option>
-                                <option>Remediation Task Status</option>
-                            </select>
-                        </div>
-                        <div>
-                            <label className="block text-sm font-medium text-gray-700">Filter by Zone</label>
-                            <select disabled className="mt-1 block w-full px-3 py-2 border rounded-lg shadow-sm bg-gray-50">
-                                <option>All Zones</option>
-                                {PURDUE_ZONES.map(z => <option key={z}>{z}</option>)}
-                            </select>
-                        </div>
-                        <div>
-                            <label className="block text-sm font-medium text-gray-700">Date Range</label>
-                            <input type="text" disabled placeholder="Q4 2025" className="mt-1 block w-full px-3 py-2 border rounded-lg shadow-sm bg-gray-50" />
-                        </div>
-                    </div>
-                    <button disabled className="flex items-center bg-gray-400 text-white px-4 py-2 rounded-xl font-semibold cursor-not-allowed">
-                        <Download className="w-5 h-5 mr-2" /> Generate & Export Report (Disabled)
-                    </button>
-                </div>
-            </div>
-        );
 
-        // 5.7 Settings & Admin Dashboard
-        const SettingsPage = () => (
-            <div className="space-y-6 bg-white p-6 rounded-xl shadow-lg">
-                <h1 className="text-3xl font-extrabold text-gray-800 border-b pb-2">Assessment Settings</h1>
-                <p className="text-gray-600">Define global targets and assessment parameters here.</p>
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                    <div className="p-4 border rounded-xl">
-                        <h3 className="font-bold text-indigo-700 mb-2">Target Security Level (SL)</h3>
-                        <p className="text-sm text-gray-500 mb-2">The security level to be achieved across the OT network.</p>
-                        <select disabled className="mt-1 block w-full px-3 py-2 border rounded-lg shadow-sm bg-gray-50">
-                            <option>SL 1</option>
-                            <option>SL 2</option>
-                            <option>SL 3 (Recommended)</option>
-                            <option>SL 4</option>
-                        </select>
-                    </div>
-                    <div className="p-4 border rounded-xl">
-                        <h3 className="font-bold text-indigo-700 mb-2">Assessment Cadence</h3>
-                        <p className="text-sm text-gray-500 mb-2">How often should full compliance checks be performed?</p>
-                        <select disabled className="mt-1 block w-full px-3 py-2 border rounded-lg shadow-sm bg-gray-50">
-                            <option>Quarterly</option>
-                            <option>Semi-Annually</option>
-                            <option>Annually</option>
-                        </select>
-                    </div>
-                </div>
-            </div>
-        );
+        const Reports = () => createHTML('div', { class: 'space-y-6 bg-white p-6 rounded-xl shadow-lg' }, [
+            createHTML('h1', { class: 'text-3xl font-extrabold text-gray-800 border-b pb-2' }, 'Reporting & Export'),
+            createHTML('p', { class: 'text-gray-600' }, 'Generate comprehensive reports on compliance, risk scores, and remediation status. Use the browser\'s print/PDF feature on the main dashboards for a detailed view.'),
+            createHTML('div', { class: 'p-4 border border-indigo-200 rounded-xl space-y-4' }, [
+                createHTML('div', { class: 'grid grid-cols-1 sm:grid-cols-3 gap-4' }, [
+                    ['Report Type', 'Executive Summary'],
+                    ['Filter by Zone', 'All Zones'],
+                    ['Date Range', 'Q4 2025']
+                ].map(([label, mockValue]) => createHTML('div', {}, [
+                    createHTML('label', { class: 'block text-sm font-medium text-gray-700' }, label),
+                    createHTML('input', { type: 'text', disabled: true, value: mockValue, placeholder: mockValue, class: 'mt-1 block w-full px-3 py-2 border rounded-lg shadow-sm bg-gray-50' })
+                ]))),
+                createHTML('button', { disabled: true, class: 'flex items-center bg-gray-400 text-white px-4 py-2 rounded-xl font-semibold cursor-not-allowed' }, [
+                    renderIcon('download', 'w-5 h-5 mr-2'), ' Generate & Export Report (Disabled)'
+                ]),
+            ]),
+        ]);
 
-        const AdminDashboard = ({ userId, appId }) => (
-            <div className="space-y-6 bg-white p-6 rounded-xl shadow-lg">
-                <h1 className="text-3xl font-extrabold text-gray-800 border-b pb-2">Admin Dashboard & System Info</h1>
-                
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                    <div className="bg-gray-50 p-4 rounded-lg border">
-                        <h3 className="font-bold text-lg text-red-700 flex items-center"><Layers className="w-5 h-5 mr-2" /> Application ID (Mandatory Path)</h3>
-                        <p className="text-sm text-gray-600 mt-1">This ID is used in the Firestore public path: <code className="font-mono text-xs text-indigo-600 break-all">/artifacts/<strong>{appId}</strong>/public/data/...</code></p>
-                        <code className="block mt-2 p-2 bg-white rounded font-mono text-sm break-all">{appId}</code>
-                    </div>
-                    <div className="bg-gray-50 p-4 rounded-lg border">
-                        <h3 className="font-bold text-lg text-indigo-700 flex items-center"><Key className="w-5 h-5 mr-2" /> Current Session User ID</h3>
-                        <p className="text-sm text-gray-600 mt-1">The unique UID assigned to this session by Firebase Authentication.</p>
-                        <code className="block mt-2 p-2 bg-white rounded font-mono text-sm break-all">{userId}</code>
-                    </div>
-                </div>
+        const SettingsPage = () => createHTML('div', { class: 'space-y-6 bg-white p-6 rounded-xl shadow-lg' }, [
+            createHTML('h1', { class: 'text-3xl font-extrabold text-gray-800 border-b pb-2' }, 'Assessment Settings'),
+            createHTML('p', { class: 'text-gray-600' }, 'Define global targets and assessment parameters here. (Admin access only)'),
+            createHTML('div', { class: 'grid grid-cols-1 sm:grid-cols-2 gap-4' }, [
+                createHTML('div', { class: 'p-4 border rounded-xl' }, [
+                    createHTML('h3', { class: 'font-bold text-indigo-700 mb-2' }, 'Target Security Level (SL)'),
+                    createHTML('p', { class: 'text-sm text-gray-500 mb-2' }, 'The security level to be achieved across the OT network.'),
+                    createHTML('select', { disabled: true, class: 'mt-1 block w-full px-3 py-2 border rounded-lg shadow-sm bg-gray-50' }, [
+                        ['SL 1', 'SL 2', 'SL 3 (Recommended)', 'SL 4'].map(o => createHTML('option', {}, o))
+                    ]),
+                ]),
+                createHTML('div', { class: 'p-4 border rounded-xl' }, [
+                    createHTML('h3', { class: 'font-bold text-indigo-700 mb-2' }, 'Assessment Cadence'),
+                    createHTML('p', { class: 'text-sm text-gray-500 mb-2' }, 'How often should full compliance checks be performed?'),
+                    createHTML('select', { disabled: true, class: 'mt-1 block w-full px-3 py-2 border rounded-lg shadow-sm bg-gray-50' }, [
+                        ['Quarterly', 'Semi-Annually', 'Annually'].map(o => createHTML('option', {}, o))
+                    ]),
+                ]),
+            ]),
+        ]);
 
-                <h2 className="text-2xl font-semibold text-gray-800 pt-4">Mock User Management</h2>
-                <div className="bg-gray-50 rounded-xl overflow-x-auto">
-                    <table className="min-w-full divide-y divide-gray-200">
-                        <thead className="bg-gray-100"><tr><th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Role</th><th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Email (Mock)</th><th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Full Firestore UID</th></tr></thead>
-                        <tbody className="bg-white divide-y divide-gray-200">
-                            {MOCK_USERS.map(user => (
-                                <tr key={user.uid} className="hover:bg-gray-50">
-                                    <td className="px-6 py-4 whitespace-nowrap"><span className={`px-2 py-0.5 text-xs font-semibold rounded-full ${user.role === 'admin' ? 'bg-indigo-100 text-indigo-800' : 'bg-gray-100 text-gray-800'}`}>{user.role}</span></td>
-                                    <td className="px-6 py-4 text-sm text-gray-900">{user.email}</td>
-                                    <td className="px-6 py-4 text-sm font-mono text-gray-600 break-all">{user.uid}</td>
-                                </tr>
-                            ))}
-                        </tbody>
-                    </table>
-                </div>
-            </div>
-        );
+        const AdminDashboard = () => createHTML('div', { class: 'space-y-6 bg-white p-6 rounded-xl shadow-lg' }, [
+            createHTML('h1', { class: 'text-3xl font-extrabold text-gray-800 border-b pb-2' }, 'Admin Dashboard & System Info'),
+            createHTML('div', { class: 'grid grid-cols-1 md:grid-cols-2 gap-4 mt-4' }, [
+                createHTML('div', { class: 'bg-gray-50 p-4 rounded-lg border' }, [
+                    createHTML('h3', { class: 'font-bold text-lg text-red-700 flex items-center' }, [renderIcon('layers', 'w-5 h-5 mr-2'), ' Application ID (Mandatory Path)']),
+                    createHTML('p', { class: 'text-sm text-gray-600 mt-1' }, `This ID is used in the Firestore public path: ${createHTML('code', { class: 'font-mono text-xs text-indigo-600 break-all' }, `/artifacts/<strong>${appId}</strong>/public/data/...`)}`),
+                    createHTML('code', { class: 'block mt-2 p-2 bg-white rounded font-mono text-sm break-all' }, appId),
+                ]),
+                createHTML('div', { class: 'bg-gray-50 p-4 rounded-lg border' }, [
+                    createHTML('h3', { class: 'font-bold text-lg text-indigo-700 flex items-center' }, [renderIcon('key', 'w-5 h-5 mr-2'), ' Current Session User ID']),
+                    createHTML('p', { class: 'text-sm text-gray-600 mt-1' }, 'The unique UID assigned to this session by Firebase Authentication.'),
+                    createHTML('code', { class: 'block mt-2 p-2 bg-white rounded font-mono text-sm break-all' }, state.userId || 'N/A'),
+                ]),
+            ]),
+            createHTML('h2', { class: 'text-2xl font-semibold text-gray-800 pt-4' }, 'Mock User Management'),
+            createHTML('div', { class: 'bg-gray-50 rounded-xl overflow-x-auto' }, [
+                createHTML('table', { class: 'min-w-full divide-y divide-gray-200' }, [
+                    createHTML('thead', { class: 'bg-gray-100' }, [
+                        createHTML('tr', {}, [['Role', 'Email (Mock)', 'Full Firestore UID'].map(h => createHTML('th', { class: 'px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase' }, h))]),
+                    ]),
+                    createHTML('tbody', { class: 'bg-white divide-y divide-gray-200' }, MOCK_USERS.map(user => createHTML('tr', { key: user.uid, class: 'hover:bg-gray-50' }, [
+                        createHTML('td', { class: 'px-6 py-4 whitespace-nowrap' }, createHTML('span', { class: `px-2 py-0.5 text-xs font-semibold rounded-full ${user.role === 'admin' ? 'bg-indigo-100 text-indigo-800' : 'bg-gray-100 text-gray-800'}` }, user.role)),
+                        createHTML('td', { class: 'px-6 py-4 text-sm text-gray-900' }, user.email),
+                        createHTML('td', { class: 'px-6 py-4 text-sm font-mono text-gray-600 break-all' }, user.uid),
+                    ]))),
+                ]),
+            ]),
+        ]);
 
-        const UserGuide = () => (
-            <div className="space-y-6 bg-white p-6 rounded-xl shadow-lg">
-                <h1 className="text-3xl font-extrabold text-gray-800 border-b pb-2">OT Guardian User Guide / Help</h1>
-                <div className="space-y-4 text-gray-700">
-                    <p>Welcome to the OT Guardian Security Posture Management simulator. Use the **Role Selector** in the header to switch roles and test access control.</p>
-                    
-                    <h2 className="text-xl font-semibold text-indigo-700 pt-2 flex items-center"><Cpu className="w-5 h-5 mr-2" /> Asset Builder</h2>
-                    <p>Use this view to add new assets (PLCs, HMIs, etc.). When an asset is created, its compliance structures (IEC 62443, SANS) are automatically initialized with all controls set to **'Not Assessed'**.</p>
-                    
-                    <h2 className="text-xl font-semibold text-indigo-700 pt-2 flex items-center"><CheckCircle className="w-5 h-5 mr-2" /> Security Controls</h2>
-                    <p>This is where engineers assess controls. Select an **Asset** and a **Framework** to see the control list. Use the status dropdown to mark compliance. If status is 'Not Implemented' or 'Partially Implemented', a **Create Task** button appears to log a remediation gap.</p>
-                    
-                    <h2 className="text-xl font-semibold text-indigo-700 pt-2 flex items-center"><Shield className="w-5 h-5 mr-2" /> Risk Dashboards</h2>
-                    <p>The dashboards provide a rollup of compliance data. The **Risk Dashboard** focuses on operational metrics and high-risk assets, while the **Manager Dashboard** provides an executive view of Foundational Requirement coverage.</p>
-                </div>
-            </div>
-        );
+        const UserGuide = () => createHTML('div', { class: 'space-y-6 bg-white p-6 rounded-xl shadow-lg' }, [
+            createHTML('h1', { class: 'text-3xl font-extrabold text-gray-800 border-b pb-2' }, 'OT Guardian User Guide / Help'),
+            createHTML('div', { class: 'space-y-4 text-gray-700' }, [
+                createHTML('p', {}, 'Welcome to the OT Guardian Security Posture Management simulator. Use the <strong>Role Selector</strong> in the header to switch roles and test access control.'),
+                createHTML('h2', { class: 'text-xl font-semibold text-indigo-700 pt-2 flex items-center' }, [renderIcon('cpu', 'w-5 h-5 mr-2'), ' Asset Builder']),
+                createHTML('p', {}, 'Use this view to add new assets (PLCs, HMIs, etc.). When an asset is created, its compliance structures (IEC 62443, SANS) are automatically initialized with all controls set to <strong>\'Not Assessed\'</strong>.'),
+                createHTML('h2', { class: 'text-xl font-semibold text-indigo-700 pt-2 flex items-center' }, [renderIcon('check-circle', 'w-5 h-5 mr-2'), ' Security Controls']),
+                createHTML('p', {}, 'This is where engineers assess controls. Select an <strong>Asset</strong> and a <strong>Framework</strong> to see the control list. Use the status dropdown to mark compliance. If status is \'Not Implemented\' or \'Partially Implemented\', a <strong>Create Task</strong> button appears to log a remediation gap.'),
+                createHTML('h2', { class: 'text-xl font-semibold text-indigo-700 pt-2 flex items-center' }, [renderIcon('shield', 'w-5 h-5 mr-2'), ' Risk Dashboards']),
+                createHTML('p', {}, 'The dashboards provide a rollup of compliance data. The <strong>Risk Dashboard</strong> focuses on operational metrics and high-risk assets, while the <strong>Manager Dashboard</strong> provides an executive view of Foundational Requirement coverage.'),
+            ]),
+        ]);
 
 
-        // Standard React 18 rendering code
-        const container = document.getElementById('root');
-        const root = ReactDOM.createRoot(container);
-        root.render(<App />);
+        // --- MAIN RENDER LOGIC ---
+
+        const renderApp = () => {
+            const root = document.getElementById('root');
+            let contentHtml = '';
+
+            const navItems = [
+                { view: 'riskDashboard', label: 'Risk Dashboard', icon: 'shield', roles: ['admin', 'manager', 'engineer'] },
+                { view: 'managerDashboard', label: 'Manager Dashboard', icon: 'bar-chart-2', roles: ['admin', 'manager'] },
+                { view: 'assetBuilder', label: 'Asset Builder', icon: 'cpu', roles: ['admin', 'engineer'] },
+                { view: 'securityControls', label: 'Controls', icon: 'check-circle', roles: ['admin', 'engineer'] },
+                { view: 'remediationTasks', label: 'Remediation Tasks', icon: 'hard-hat', roles: ['admin', 'manager', 'engineer'] },
+                { view: 'reports', label: 'Reports', icon: 'file-text', roles: ['admin', 'manager'] },
+                { view: 'userGuide', label: 'User Guide', icon: 'book-open', roles: ['admin', 'manager', 'engineer'] },
+                { view: 'settings', label: 'Settings', icon: 'settings', roles: ['admin'] },
+                { view: 'adminDashboard', label: 'Admin', icon: 'user', roles: ['admin'] },
+            ].filter(item => hasAccess(item.roles));
+
+            // Loading/Error States
+            if (state.firebaseError) {
+                contentHtml = createHTML('div', { class: 'flex flex-col items-center justify-center p-20 bg-red-50 rounded-xl shadow-lg border-2 border-red-300 mt-10' }, [
+                    renderIcon('alert-triangle', 'w-12 h-12 text-red-500 mb-4'),
+                    createHTML('h2', { class: 'text-2xl font-bold text-red-800 mb-2' }, 'Critical Error'),
+                    createHTML('p', { class: 'text-gray-700 text-center max-w-md' }, state.firebaseError),
+                ]);
+            } else if (!state.isAuthReady) {
+                contentHtml = createHTML('div', { class: 'flex flex-col items-center justify-center p-20 bg-white rounded-xl shadow-lg mt-10' }, [
+                    createHTML('div', { class: 'animate-spin rounded-full h-12 w-12 border-b-4 border-indigo-600 mb-4' }),
+                    createHTML('span', { class: 'text-xl font-medium text-indigo-700' }, 'Initializing Firebase connection...'),
+                ]);
+            } else {
+                // Main Application Layout
+                let mainContent = '';
+                switch (state.currentView) {
+                    case 'riskDashboard': mainContent = RiskDashboard(); break;
+                    case 'managerDashboard': mainContent = ManagerDashboard(); break;
+                    case 'assetBuilder': mainContent = AssetBuilder(); break;
+                    case 'securityControls': mainContent = SecurityControls(); break;
+                    case 'remediationTasks': mainContent = RemediationTasks(); break;
+                    case 'reports': mainContent = Reports(); break;
+                    case 'settings': mainContent = SettingsPage(); break;
+                    case 'adminDashboard': mainContent = AdminDashboard(); break;
+                    case 'userGuide': mainContent = UserGuide(); break;
+                    default: mainContent = RiskDashboard();
+                }
+
+                const navBar = createHTML('nav', { id: 'main-nav', class: 'flex space-x-1 p-3 rounded-xl bg-white shadow-lg print-hide overflow-x-auto whitespace-nowrap mb-6' },
+                    navItems.map(item => createHTML('button', {
+                        'data-view': item.view,
+                        class: `nav-btn flex items-center px-3 py-2 text-sm font-semibold rounded-lg transition-all duration-150 ${
+                            state.currentView === item.view ? 'bg-indigo-700 text-white shadow-md' : 'text-gray-700 hover:bg-indigo-100'
+                        }`
+                    }, [
+                        renderIcon(item.icon, 'w-4 h-4 mr-2'), item.label
+                    ]))
+                );
+
+                contentHtml = [
+                    createHTML('header', { class: 'bg-indigo-800 text-white shadow-xl print-hide' }, [
+                        createHTML('div', { class: 'container mx-auto px-4 py-3 flex justify-between items-center' }, [
+                            createHTML('h1', { class: 'text-2xl font-bold flex items-center' }, [
+                                renderIcon('shield', 'w-6 h-6 mr-2'), 'OT Guardian Security Posture Management'
+                            ]),
+                            createHTML('div', { class: 'flex items-center space-x-4' }, [
+                                // Role Selector
+                                createHTML('div', { class: 'text-sm flex items-center bg-indigo-700 p-2 rounded-lg' }, [
+                                    createHTML('span', { class: 'mr-2' }, 'View as:'),
+                                    createHTML('select', { id: 'role-selector', class: 'bg-indigo-600 text-white rounded-md p-1 font-semibold focus:ring-2 focus:ring-white' },
+                                        ['admin', 'manager', 'engineer'].map(role => createHTML('option', { value: role, selected: role === state.userRole }, role))
+                                    ),
+                                ]),
+                                createHTML('span', { class: 'text-sm font-medium hidden sm:inline' }, `Current User: ${createHTML('code', { class: 'bg-indigo-700 px-2 py-1 rounded-md text-xs break-all' }, state.userId || 'N/A')}`),
+                                createHTML('button', { title: 'Sign Out (Placeholder)', class: 'p-2 rounded-full bg-indigo-700 hover:bg-indigo-600 transition-colors shadow-lg' }, renderIcon('log-out', 'w-5 h-5'))
+                            ]),
+                        ]),
+                    ]),
+                    createHTML('div', { class: 'flex-grow container mx-auto px-4 py-4 print-full' }, [
+                        createHTML('div', { id: 'message-box', style: 'display: none;' }),
+                        navBar,
+                        createHTML('main', { class: 'p-1 sm:p-4' }, mainContent)
+                    ])
+                ].join('');
+            }
+           
+            root.innerHTML = contentHtml;
+
+            // Post-render event listeners for navigation and role switching
+            if (state.isAuthReady && !state.firebaseError) {
+                // Navigation
+                document.querySelectorAll('.nav-btn').forEach(button => {
+                    button.onclick = (e) => updateState({ currentView: e.currentTarget.getAttribute('data-view') });
+                });
+                // Role Selector
+                document.getElementById('role-selector').onchange = (e) => updateState({ userRole: e.target.value, currentView: 'riskDashboard' });
+            }
+           
+            // Re-initialize Lucide icons
+            lucide.createIcons();
+        };
+
+        // Initialize the application
+        initializeFirebase();
 
     </script>
 </body>

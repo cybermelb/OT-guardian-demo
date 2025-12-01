@@ -4,13 +4,10 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>OT Guardian App (V3 - Finalized Deployment)</title>
-    <!-- Load Tailwind CSS -->
     <script src="https://cdn.tailwindcss.com"></script>
-   
-    <!-- Load Lucide Icons -->
+    
     <script src="https://unpkg.com/lucide@latest"></script>
 
-    <!-- Print/PDF Optimization for Reports -->
     <style>
         @media print {
             .print-hide { display: none !important; }
@@ -20,22 +17,21 @@
         }
     </style>
 
-    <!-- Load Firebase SDKs as a module for global use -->
     <script type="module">
         import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
-        import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged, signOut } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged, signOut, signInWithEmailAndPassword } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
         import { getFirestore, doc, setDoc, collection, query, onSnapshot, serverTimestamp, setLogLevel } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
 
         // Expose Firebase services globally for the main Vanilla JS script
         window.firebase = {
             initializeApp, getAuth, signInAnonymously, signInWithCustomToken,
             onAuthStateChanged, signOut, getFirestore, doc, setDoc,
-            collection, query, onSnapshot, serverTimestamp, setLogLevel
+            collection, query, onSnapshot, serverTimestamp, setLogLevel,
+            signInWithEmailAndPassword // <-- NEW: Added for standard login
         };
     </script>
 </head>
 <body class="bg-gray-100 min-h-screen font-[Inter]">
-    <!-- Root Container -->
     <div id="root" class="min-h-screen"></div>
 
     <script>
@@ -53,7 +49,7 @@
 
         // --- GLOBAL APP STATE ---
         const appState = {
-            currentView: 'riskDashboard',
+            currentView: 'login', // <-- MODIFIED: Start at login screen
             isAuthenticated: false,
             isAuthReady: false,
             isFirebaseReady: false,
@@ -64,12 +60,12 @@
             error: null,
             db: null,
             auth: null,
-            appId: DEFAULT_APP_ID, // Default to hardcoded project ID
+            appId: DEFAULT_APP_ID,
             dataInitialized: false
         };
 
         // --- HELPER FUNCTIONS ---
-       
+        
         function createElement(tag, classes = '', content = '') {
             const el = document.createElement(tag);
             if (classes) el.className = classes;
@@ -117,7 +113,7 @@
             }
             return box;
         }
-       
+        
         function getSeverityClass(severity) {
             switch (severity) {
                 case 'Critical': return 'bg-red-100 text-red-800 border-red-500';
@@ -127,7 +123,8 @@
             }
         }
 
-        // --- EXPORT FUNCTIONS ---
+        // --- EXPORT FUNCTIONS (CSV/PDF) ---
+        // (functions remain the same)
         function exportToCSV(filename, data, columns) {
             if (data.length === 0) {
                 console.error("No data to export!");
@@ -155,13 +152,13 @@
                 console.warn("Your browser does not support CSV download.");
             }
         }
-       
+        
         function exportToPDF() {
             window.print();
         }
-       
+        
         // --- VIEW CREATION FUNCTIONS (Auditor, Dashboard, Admin) ---
-       
+        
         function createLoadingView() {
             const container = createElement('div', 'flex flex-col justify-center items-center h-96');
             const spinner = createElement('div', 'animate-spin rounded-full h-12 w-12 border-b-2 border-indigo-500');
@@ -170,11 +167,56 @@
             return container;
         }
 
+        // <-- NEW FUNCTION: Login View -->
+        function createLoginView() {
+            const container = createElement('div', 'max-w-md mx-auto p-8 bg-white rounded-xl shadow-2xl space-y-6 border border-indigo-200');
+            container.appendChild(createElement('h2', 'text-3xl font-bold text-center text-gray-900', 'OT Guardian Login'));
+            container.appendChild(createElement('p', 'text-center text-sm text-gray-500', 'Sign in with your Admin or Engineer credentials.'));
+
+            const form = createElement('form', 'space-y-4');
+
+            const emailInput = createElement('input', 'w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-indigo-500 focus:border-indigo-500', '');
+            emailInput.type = 'email';
+            emailInput.placeholder = 'Email';
+            emailInput.id = 'login-email';
+
+            const passwordInput = createElement('input', 'w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-indigo-500 focus:border-indigo-500', '');
+            passwordInput.type = 'password';
+            passwordInput.placeholder = 'Password';
+            passwordInput.id = 'login-password';
+
+            const loginBtn = createElement('button', 'w-full flex justify-center items-center px-4 py-2 border border-transparent text-sm font-medium rounded-lg shadow-sm text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500', 'Sign In');
+            loginBtn.type = 'submit';
+
+            form.append(emailInput, passwordInput, loginBtn);
+            
+            form.addEventListener('submit', (e) => {
+                e.preventDefault();
+                const email = document.getElementById('login-email').value;
+                const password = document.getElementById('login-password').value;
+                handleEmailPasswordSignIn(email, password);
+            });
+
+            container.appendChild(form);
+            container.appendChild(createElement('div', 'relative'));
+            container.appendChild(createElement('div', 'absolute inset-0 flex items-center', '<span class="w-full border-t border-gray-300"></span>'));
+            container.appendChild(createElement('div', 'relative flex justify-center text-sm', '<span class="px-2 bg-white text-gray-500">OR</span>'));
+
+
+            // Demon User Fallback (Read-Only)
+            const demonUserBtn = createElement('button', 'w-full flex justify-center items-center px-4 py-2 border border-transparent text-sm font-medium rounded-lg shadow-sm text-indigo-700 bg-indigo-100 hover:bg-indigo-200 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500', [getIcon('eye', 'w-4 h-4 mr-2'), document.createTextNode('Continue as Demon User (Read-Only)')]);
+            demonUserBtn.type = 'button';
+            demonUserBtn.addEventListener('click', signInAsDemonUser);
+            container.appendChild(demonUserBtn);
+
+            return container;
+        }
+
         function createRiskDashboardView(data) {
             // (Dashboard content implementation - same as previous version)
             const container = createElement('div', 'space-y-6');
             container.appendChild(createElement('h2', 'text-3xl font-extrabold text-gray-900 border-b pb-2', 'OT Risk Dashboard'));
-           
+            
             // Key Metrics Cards
             const criticalCount = data.risks.filter(r => r.severity === 'Critical').length;
             const cardsData = [
@@ -199,7 +241,7 @@
 
             // Risk Breakdown Table
             container.appendChild(createElement('h3', 'text-2xl font-semibold text-gray-800 pt-4', 'Top 5 Outstanding Risks'));
-           
+            
             const tableContainer = createElement('div', 'bg-white rounded-xl shadow-lg overflow-x-auto table-responsive border');
             const table = createElement('table', 'min-w-full divide-y divide-gray-200');
             const thead = createElement('thead', 'bg-gray-50');
@@ -217,19 +259,19 @@
             }).slice(0, 5).forEach(risk => {
                 const trBody = createElement('tr', 'hover:bg-gray-50 transition-colors');
                 const assetName = data.assets.find(a => a.id === risk.assetId)?.name || 'N/A';
-               
+                
                 const severityClass = getSeverityClass(risk.severity);
 
                 trBody.appendChild(createElement('td', 'px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900', risk.id.substring(0, 8)));
                 trBody.appendChild(createElement('td', 'px-6 py-4 text-sm text-gray-500', risk.description));
                 trBody.appendChild(createElement('td', 'px-6 py-4 whitespace-nowrap text-sm text-gray-500', assetName));
-               
+                
                 const severityTd = createElement('td', 'px-6 py-4 whitespace-nowrap text-sm font-semibold');
                 severityTd.appendChild(createElement('span', `px-2 inline-flex text-xs leading-5 font-semibold rounded-full ${severityClass}`, risk.severity));
                 trBody.appendChild(severityTd);
-               
+                
                 trBody.appendChild(createElement('td', 'px-6 py-4 whitespace-nowrap text-sm text-gray-500', risk.status));
-               
+                
                 tbody.appendChild(trBody);
             });
 
@@ -241,7 +283,7 @@
         }
 
         function createAuditorReportView(data) {
-            // (Auditor Report content implementation - same as previous version, including CSV/PDF)
+            // (Auditor Report content implementation - same as previous version)
             const container = createElement('div', 'space-y-6');
             container.appendChild(createElement('h2', 'text-3xl font-extrabold text-gray-900 border-b pb-2 flex items-center', [
                 getIcon('file-text', 'w-7 h-7 mr-2 text-indigo-600'),
@@ -254,14 +296,14 @@
                 acc.status[risk.status] = (acc.status[risk.status] || 0) + 1;
                 return acc;
             }, { severity: {}, status: {} });
-           
+            
             const totalRisks = data.risks.length;
             const severityKeys = ['Critical', 'High', 'Medium', 'Low'];
             const statusKeys = ['Open', 'In Progress', 'Closed', 'False Positive'];
 
             // --- Export Controls ---
             const exportDiv = createElement('div', 'flex space-x-4 print-hide');
-           
+            
             const csvBtn = createElement('button', 'flex items-center px-4 py-2 bg-green-500 text-white font-semibold rounded-lg shadow-md hover:bg-green-600 transition-all');
             csvBtn.append(getIcon('file-text', 'w-5 h-5 mr-2'), document.createTextNode('Download Risk CSV'));
             csvBtn.addEventListener('click', () => {
@@ -275,7 +317,7 @@
                 exportToCSV('OT_Guardian_Risk_Report.csv', data.risks, columns);
             });
             exportDiv.appendChild(csvBtn);
-           
+            
             const pdfBtn = createElement('button', 'flex items-center px-4 py-2 bg-red-500 text-white font-semibold rounded-lg shadow-md hover:bg-red-600 transition-all');
             pdfBtn.append(getIcon('printer', 'w-5 h-5 mr-2'), document.createTextNode('Export PDF (Print)'));
             pdfBtn.addEventListener('click', exportToPDF);
@@ -283,15 +325,14 @@
 
             container.appendChild(exportDiv);
 
-
             // --- Summary Aggregation Tables ---
-           
+            
             // 1. Severity Summary
             container.appendChild(createElement('h3', 'text-2xl font-semibold text-gray-800 pt-6 pb-2', '1. Risk Severity Breakdown'));
-           
+            
             const severityTableContainer = createElement('div', 'bg-white rounded-xl shadow-lg overflow-x-auto table-responsive border');
             const severityTable = createElement('table', 'min-w-full divide-y divide-gray-200');
-           
+            
             severityTable.innerHTML = `
                 <thead class="bg-gray-50">
                     <tr>
@@ -308,7 +349,7 @@
                         return `
                             <tr>
                                 <td class="px-6 py-4 whitespace-nowrap text-sm font-medium">
-                                    <span class="px-2 inline-flex text-sm leading-5 font-semibold rounded-full ${severityClass}">${key}</span>
+                                    <span class="px-2 inline-flex text-xs leading-5 font-semibold rounded-full ${severityClass}">${key}</span>
                                 </td>
                                 <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-900 font-bold">${count}</td>
                                 <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">${percentage}%</td>
@@ -325,13 +366,12 @@
             severityTableContainer.appendChild(severityTable);
             container.appendChild(severityTableContainer);
 
-
             // 2. Status Summary
             container.appendChild(createElement('h3', 'text-2xl font-semibold text-gray-800 pt-6 pb-2', '2. Risk Status Summary'));
-           
+            
             const statusTableContainer = createElement('div', 'bg-white rounded-xl shadow-lg overflow-x-auto table-responsive border');
             const statusTable = createElement('table', 'min-w-full divide-y divide-gray-200');
-           
+            
             statusTable.innerHTML = `
                 <thead class="bg-gray-50">
                     <tr>
@@ -345,11 +385,11 @@
                         const count = riskCounts.status[key] || 0;
                         const resolutionRate = key === 'Closed' ? (count / totalRisks) * 100 : 0;
                         const statusClass = key === 'Closed' ? 'bg-green-100 text-green-800' :
-                                            key === 'Open' ? 'bg-red-100 text-red-800' : 'bg-blue-100 text-blue-800';
+                                             key === 'Open' ? 'bg-red-100 text-red-800' : 'bg-blue-100 text-blue-800';
                         return `
                             <tr>
                                 <td class="px-6 py-4 whitespace-nowrap text-sm font-medium">
-                                    <span class="px-2 inline-flex text-sm leading-5 font-semibold rounded-full ${statusClass}">${key}</span>
+                                    <span class="px-2 inline-flex text-xs leading-5 font-semibold rounded-full ${statusClass}">${key}</span>
                                 </td>
                                 <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-900 font-bold">${count}</td>
                                 <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">${resolutionRate > 0 ? resolutionRate.toFixed(1) + '%' : 'N/A'}</td>
@@ -360,14 +400,14 @@
             `;
             statusTableContainer.appendChild(statusTable);
             container.appendChild(statusTableContainer);
-           
+            
             return container;
         }
 
         function createAdminView() {
             // (Admin view implementation - same as previous version)
             const { userId, userRole, isFirebaseReady } = appState;
-           
+            
             const mockUsers = [
                 { id: 1, email: 'cybermel@gmail.com', role: 'Admin (Mock)', lastLogin: '2025-11-28' },
                 { id: 2, email: 'faysalhasn2001@yahoo.com', role: 'Engineer (Mock)', lastLogin: '2025-11-27' },
@@ -394,7 +434,7 @@
                 getIcon('users', 'w-7 h-7 mr-2 text-indigo-600'),
                 createElement('span', '', 'User & Application Management')
             ]));
-           
+            
             const statusBox = createElement('div', 'bg-indigo-50 border-l-4 border-indigo-400 text-indigo-700 p-4 rounded-xl shadow-md');
             statusBox.appendChild(createElement('p', 'font-bold', 'Your Current Role Status:'));
             statusBox.appendChild(createElement('p', 'text-sm', `User ID (UID): ` + `<span class="font-mono bg-indigo-100 p-1 rounded text-xs">${userId || 'N/A'}</span>`));
@@ -405,7 +445,7 @@
 
             const tableContainer = createElement('div', 'bg-white rounded-xl shadow-lg overflow-x-auto table-responsive border');
             const table = createElement('table', 'min-w-full divide-y divide-gray-200');
-           
+            
             // Table Head
             const thead = createElement('thead', 'bg-gray-50');
             const trHead = createElement('tr');
@@ -419,23 +459,23 @@
             const tbody = createElement('tbody', 'bg-white divide-y divide-gray-200');
             allUsers.forEach(user => {
                 const trBody = createElement('tr', `${user.isCurrent ? 'bg-indigo-50 font-bold' : 'hover:bg-gray-50'} transition-colors`);
-               
+                
                 const roleClass = user.role.includes('Admin') ? 'bg-red-100 text-red-800' :
-                                  user.role.includes('Engineer') ? 'bg-green-100 text-green-800' :
-                                  'bg-blue-100 text-blue-800';
+                                    user.role.includes('Engineer') ? 'bg-green-100 text-green-800' :
+                                    'bg-blue-100 text-blue-800';
 
                 trBody.appendChild(createElement('td', 'px-6 py-4 whitespace-nowrap text-sm text-gray-900', user.email));
-               
+                
                 const roleTd = createElement('td', 'px-6 py-4 whitespace-nowrap text-sm font-semibold');
                 roleTd.appendChild(createElement('span', `px-2 inline-flex text-xs leading-5 font-semibold rounded-full ${roleClass}`, user.role));
                 trBody.appendChild(roleTd);
-               
+                
                 trBody.appendChild(createElement('td', 'px-6 py-4 whitespace-nowrap text-sm text-gray-500', user.lastLogin));
-               
+                
                 const statusTd = createElement('td', 'px-6 py-4 whitespace-nowrap text-sm text-gray-500');
                 statusTd.innerHTML = user.isCurrent ? '<span class="text-indigo-600 font-bold">Current User</span>' : 'Active';
                 trBody.appendChild(statusTd);
-               
+                
                 tbody.appendChild(trBody);
             });
 
@@ -454,7 +494,9 @@
             return container;
         }
 
+
         // --- MAIN RENDER LOOP ---
+
 
         function render() {
             const root = document.getElementById('root');
@@ -467,11 +509,11 @@
 
             // 1. Message Box Area
             const msgArea = createElement('div', 'p-4 pt-8 print-hide');
-            const message = appState.error || (appState.isFirebaseReady && appState.isAuthenticated ?
+            const message = appState.error || (appState.isAuthenticated ?
                 `Welcome, User ID: ${appState.userId.substring(0, 8)}... Current Role: ${appState.userRole}` :
-                "Connecting/Authenticating...");
+                "Please sign in to continue.");
             const type = appState.error ? 'error' : (appState.isAuthenticated ? 'success' : 'info');
-           
+            
             msgArea.appendChild(createMessageBox(type, message, () => {
                 appState.error = null;
                 render();
@@ -489,7 +531,7 @@
             userControls.appendChild(createElement('span', 'text-sm font-medium text-gray-600 hidden sm:block',
                 `Role: <span class="font-semibold ${appState.userRole === 'Admin' ? 'text-red-600' : 'text-indigo-600'}">${appState.userRole}</span>`
             ));
-           
+            
             if (appState.isAuthenticated) {
                 const signOutBtn = createElement('button', 'flex items-center p-2 rounded-full bg-red-500 text-white hover:bg-red-600 transition-all shadow-md', getIcon('log-out', 'w-5 h-5'));
                 signOutBtn.title = "Sign Out";
@@ -499,56 +541,62 @@
             header.appendChild(userControls);
             maxWDiv.appendChild(header);
 
-            // 3. Navigation Bar
-            const nav = createElement('nav', 'flex space-x-1 p-3 border-b bg-white shadow-inner rounded-xl mt-4 mx-4 overflow-x-auto whitespace-nowrap print-hide');
-           
-            const navItems = [
-                { view: 'riskDashboard', label: 'Dashboard', icon: 'bar-chart-2', roles: ['Engineer', 'Auditor', 'Admin'] },
-                { view: 'assetBuilder', label: 'Assets', icon: 'cpu', roles: ['Engineer', 'Admin'] },
-                { view: 'securityControls', label: 'Controls', icon: 'check-circle', roles: ['Engineer', 'Auditor', 'Admin'] },
-                { view: 'remediationTasks', label: 'Remediation', icon: 'hard-hat', roles: ['Engineer', 'Admin'] },
-                { view: 'auditorReport', label: 'Auditor Report', icon: 'file-text', roles: ['Auditor', 'Admin'] },
-                { view: 'admin', label: 'Admin', icon: 'users', roles: ['Admin'] },
-            ];
+            // 3. Navigation Bar (Only show if authenticated)
+            if (appState.isAuthenticated) {
+                const nav = createElement('nav', 'flex space-x-1 p-3 border-b bg-white shadow-inner rounded-xl mt-4 mx-4 overflow-x-auto whitespace-nowrap print-hide');
+                
+                const navItems = [
+                    { view: 'riskDashboard', label: 'Dashboard', icon: 'bar-chart-2', roles: ['Engineer', 'Auditor', 'Admin'] },
+                    { view: 'assetBuilder', label: 'Assets', icon: 'cpu', roles: ['Engineer', 'Admin'] },
+                    { view: 'securityControls', label: 'Controls', icon: 'check-circle', roles: ['Engineer', 'Auditor', 'Admin'] },
+                    { view: 'remediationTasks', label: 'Remediation', icon: 'hard-hat', roles: ['Engineer', 'Admin'] },
+                    { view: 'auditorReport', label: 'Auditor Report', icon: 'file-text', roles: ['Auditor', 'Admin'] },
+                    { view: 'admin', label: 'Admin', icon: 'users', roles: ['Admin'] },
+                ];
 
-            navItems.forEach(item => {
-                if (!item.roles.includes(appState.userRole)) return;
+                navItems.forEach(item => {
+                    if (!item.roles.includes(appState.userRole)) return;
 
-               const btn = createElement(
-  'button',
-  'flex items-center px-3 py-2 text-sm font-semibold rounded-lg transition-all duration-150'
-);
+                    const btn = createElement(
+                        'button',
+                        'flex items-center px-3 py-2 text-sm font-semibold rounded-lg transition-all duration-150'
+                    );
 
-btn.classList.add(
-  ...(appState.currentView === item.view
-    ? ['bg-indigo-700', 'text-white', 'shadow-md']
-    : ['text-gray-700', 'hover:bg-indigo-100'])
-);
+                    btn.classList.add(
+                        ...(appState.currentView === item.view
+                            ? ['bg-indigo-700', 'text-white', 'shadow-md']
+                            : ['text-gray-700', 'hover:bg-indigo-100'])
+                    );
 
-               
-                const icon = getIcon(item.icon, 'w-4 h-4 mr-2');
-                const label = document.createTextNode(item.label);
-               
-                btn.append(icon, label);
-                btn.addEventListener('click', () => {
-                    appState.currentView = item.view;
-                    render();
+                    
+                    const icon = getIcon(item.icon, 'w-4 h-4 mr-2');
+                    const label = document.createTextNode(item.label);
+                    
+                    btn.append(icon, label);
+                    btn.addEventListener('click', () => {
+                        appState.currentView = item.view;
+                        render();
+                    });
+                    nav.appendChild(btn);
                 });
-                nav.appendChild(btn);
-            });
-            maxWDiv.appendChild(nav);
+                maxWDiv.appendChild(nav);
+            }
 
-            // 4. Deployment Status Bar
-            const statusClass = appState.deploymentStatus.status === 'Online' ? 'bg-green-100 text-green-800' :
-                                appState.deploymentStatus.status === 'Warning' ? 'bg-yellow-100 text-yellow-800' :
-                                'bg-red-100 text-red-800';
-           
-            const lastCheckTime = appState.deploymentStatus.lastCheck?.seconds ?
-                new Date(appState.deploymentStatus.lastCheck.seconds * 1000).toLocaleString() : 'N/A';
 
-            const statusBar = createElement('div', `p-3 text-sm font-semibold rounded-xl text-center shadow-md mt-4 mx-4 ${statusClass} print-hide`);
-            statusBar.innerHTML = `${getIcon('zap', 'w-4 h-4 inline mr-1').outerHTML} Deployment Status: ${appState.deploymentStatus.status} | Last Check: ${lastCheckTime}`;
-            maxWDiv.appendChild(statusBar);
+            // 4. Deployment Status Bar (Only show if authenticated)
+            if (appState.isAuthenticated) {
+                const statusClass = appState.deploymentStatus.status === 'Online' ? 'bg-green-100 text-green-800' :
+                                        appState.deploymentStatus.status === 'Warning' ? 'bg-yellow-100 text-yellow-800' :
+                                        'bg-red-100 text-red-800';
+                
+                const lastCheckTime = appState.deploymentStatus.lastCheck?.seconds ?
+                    new Date(appState.deploymentStatus.lastCheck.seconds * 1000).toLocaleString() : 'N/A';
+
+                const statusBar = createElement('div', `p-3 text-sm font-semibold rounded-xl text-center shadow-md mt-4 mx-4 ${statusClass} print-hide`);
+                statusBar.innerHTML = `${getIcon('zap', 'w-4 h-4 inline mr-1').outerHTML} Deployment Status: ${appState.deploymentStatus.status} | Last Check: ${lastCheckTime}`;
+                maxWDiv.appendChild(statusBar);
+            }
+
 
 
             // 5. Main Content Area
@@ -556,12 +604,16 @@ btn.classList.add(
             const contentBox = createElement('div', 'bg-white p-6 rounded-xl shadow-2xl');
             main.appendChild(contentBox);
 
+
             let contentElement;
 
             if (!appState.isAuthReady) {
                 contentElement = createLoadingView();
+            } else if (!appState.isAuthenticated) {
+                // <-- NEW LOGIC: Display login view if not authenticated -->
+                contentElement = createLoginView();
             } else if (!appState.isFirebaseReady) {
-                // Mock Mode View Fallback
+                // Mock Mode View Fallback (Only if Firebase init failed OR if an auth error occurred)
                 const mockModeContainer = createElement('div', 'text-center p-12');
                 mockModeContainer.appendChild(createElement('h2', 'text-3xl font-bold text-red-600 mb-4', 'MOCK DATA MODE (OFFLINE)'));
                 mockModeContainer.appendChild(createElement('p', 'text-xl text-gray-700 mb-8', 'Authentication failed or Firebase connection is offline. Displaying static data.'));
@@ -594,10 +646,11 @@ btn.classList.add(
                         }
                         break;
                     default:
+                        // Default to dashboard when authenticated
                         contentElement = createRiskDashboardView(currentData);
                 }
             }
-           
+            
             contentBox.appendChild(contentElement);
             maxWDiv.appendChild(main);
             root.appendChild(container);
@@ -605,19 +658,68 @@ btn.classList.add(
             window.lucide.createIcons();
         }
 
+
         // --- FIREBASE LOGIC ---
+
+        // <-- NEW FUNCTION: Handles Email/Password Sign-in -->
+        async function handleEmailPasswordSignIn(email, password) {
+            if (!appState.auth) return;
+            appState.error = null; // Clear previous errors
+            
+            // Optional: Briefly show loading view during sign-in attempt
+            appState.currentView = 'riskDashboard'; // Switch to dashboard view for post-login display
+            render(); 
+
+            try {
+                // Standard Firebase Email/Password login
+                await window.firebase.signInWithEmailAndPassword(appState.auth, email, password);
+                // Auth listener (updateAuthState) will handle success
+            } catch (e) {
+                console.error("Email/Password Sign-in Error:", e.code, e.message);
+                appState.error = `Login failed: Invalid credentials or account does not exist.`; // Simplified message for end-user
+                appState.currentView = 'login'; // Return to login screen on failure
+                render();
+            }
+        }
+        
+        // <-- NEW FUNCTION: Handles Demon User (Anonymous) Sign-in -->
+        async function signInAsDemonUser() {
+            if (!appState.auth) return;
+            appState.error = null;
+            appState.currentView = 'riskDashboard';
+            render(); 
+            try {
+                await window.firebase.signInAnonymously(appState.auth);
+                appState.error = "Signed in as Demon User (Read-Only).";
+                // Role will be set to 'Engineer' by default in updateAuthState for read-only access
+            } catch (e) {
+                console.error("Demon User (Anonymous) Sign-in Error:", e.message);
+                appState.error = "Failed to sign in as Demon User. Firebase Offline.";
+                appState.isAuthReady = true;
+                appState.isFirebaseReady = false; 
+                render();
+            }
+        }
+
 
         async function updateAuthState(user) {
             if (user) {
                 appState.isAuthenticated = true;
                 appState.userId = user.uid;
-               
+                
                 try {
                     // Force token refresh to read custom claims (role)
                     const idTokenResult = await user.getIdTokenResult(true);
-                    const role = idTokenResult.claims.role || 'Engineer';
+                    
+                    // User Role Logic: If no custom claims, assume 'Engineer' for read-only functionality (including Demon User)
+                    const role = idTokenResult.claims.role || 'Engineer'; 
                     appState.userRole = role;
                     console.log(`User UID: ${user.uid} | Role set from token claims: ${role}`);
+
+                    // Reset to dashboard after successful login
+                    if (appState.currentView === 'login') {
+                        appState.currentView = 'riskDashboard';
+                    }
                 } catch (e) {
                     console.error("Failed to get ID token result, defaulting role:", e);
                     appState.userRole = 'Engineer';
@@ -625,15 +727,18 @@ btn.classList.add(
             } else {
                 appState.isAuthenticated = false;
                 appState.userId = null;
-                appState.userRole = 'Engineer';
+                appState.userRole = 'Engineer'; // Default role for unauthenticated views or demon mode fallback
+                appState.currentView = 'login'; // Go back to login screen
             }
             appState.isAuthReady = true;
             render();
-           
+            
+            // Initialize data listeners only once, when authenticated and ready
             if (appState.isFirebaseReady && appState.isAuthenticated && !appState.dataInitialized) {
                 initializeDataListeners();
             }
         }
+
 
         async function initializeDataListeners() {
             if (!appState.db || !appState.userId || appState.dataInitialized) return;
@@ -678,31 +783,35 @@ btn.classList.add(
             });
         }
 
-        async function signInUser() {
+
+        // <-- MODIFIED: No longer automatically falls back to signInAnonymously -->
+        async function attemptCustomTokenSignIn() {
             if (!appState.auth) return;
             try {
-                // Determine which config/token to use
                 const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
-               
+                
                 if (initialAuthToken) {
                     await window.firebase.signInWithCustomToken(appState.auth, initialAuthToken);
                 } else {
-                    await window.firebase.signInAnonymously(appState.auth);
+                    // No custom token provided. Just set auth ready.
+                    appState.isAuthReady = true;
+                    render();
                 }
             } catch (e) {
                 console.error("Authentication Error:", e.message);
-                appState.error = "Authentication failed. App will run in mock mode.";
+                appState.error = "Initial authentication attempt failed. Please sign in below.";
                 appState.isAuthReady = true;
-                appState.isFirebaseReady = false; // Force mock mode if auth fails
+                appState.isFirebaseReady = true; // Keep Firebase ready flag so we can see the login form
                 render();
             }
         }
+
 
         async function handleSignOut() {
             if (appState.auth) {
                 try {
                     await window.firebase.signOut(appState.auth);
-                    appState.currentView = 'riskDashboard';
+                    appState.currentView = 'login'; // Redirect to login after sign out
                     appState.error = "Successfully signed out.";
                     render();
                 } catch (e) {
@@ -712,6 +821,7 @@ btn.classList.add(
                 }
             }
         }
+
 
         // --- MOCK DATA (For display when persistence fails) ---
         appState.mockData = {
@@ -738,6 +848,7 @@ btn.classList.add(
 
 
         // --- INITIALIZATION ENTRY POINT ---
+
         window.onload = function() {
             // Check for Firebase availability (from the module script above)
             if (typeof window.firebase === 'undefined' || !window.firebase.initializeApp) {
@@ -756,12 +867,12 @@ btn.classList.add(
                 window.firebase.setLogLevel('debug');
                 appState.isFirebaseReady = true;
                 appState.appId = MANUAL_FIREBASE_CONFIG.projectId;
-               
+                
                 // Set up auth listener (this updates appState.isAuthReady and calls render/data listeners)
                 window.firebase.onAuthStateChanged(appState.auth, updateAuthState);
 
-                // Start the sign-in process
-                signInUser();
+                // Start the sign-in process (only checks for custom token, does NOT auto-sign-in anonymously now)
+                attemptCustomTokenSignIn();
 
             } catch (e) {
                 console.error("Fatal Firebase Initialization Error:", e);
@@ -771,9 +882,7 @@ btn.classList.add(
                 render();
             }
         };
+
     </script>
 </body>
 </html>
-
-
-

@@ -3,1534 +3,1114 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>OT Guardian Security Posture Management</title>
+    <title>OT Guardian -ICS/OT Cyber Security Posture Management</title>
     <script src="https://cdn.tailwindcss.com"></script>
-   
+    
     <!-- Lucide Icons for UI -->
     <script src="https://unpkg.com/lucide@latest"></script>
 
     <style>
         /* Custom scrollbar for better aesthetics */
-        .custom-scroll::-webkit-scrollbar {
+        .custom-scrollbar::-webkit-scrollbar {
             width: 8px;
+            height: 8px;
         }
-        .custom-scroll::-webkit-scrollbar-thumb {
+        .custom-scrollbar::-webkit-scrollbar-thumb {
             background-color: #94a3b8; /* slate-400 */
             border-radius: 4px;
         }
-        .custom-scroll::-webkit-scrollbar-track {
+        .custom-scrollbar::-webkit-scrollbar-track {
             background-color: #f1f5f9; /* slate-100 */
+        }
+        /* Mobile sidebar visibility classes */
+        .sidebar-transition {
+            transition: transform 0.3s ease-in-out;
+        }
+        .sidebar-visible {
+            transform: translateX(0) !important;
         }
         /* Style for required form fields */
         input:required:invalid, select:required:invalid, textarea:required:invalid {
             border-color: #fca5a5; /* Red-300 */
         }
-        /* Custom styles for disabled elements */
-        button:disabled {
-            opacity: 0.6;
-            cursor: not-allowed;
-        }
-        @media print {
-            .print-hide { display: none !important; }
-            .print-full { max-width: none !important; margin: 0 !important; padding: 0 !important; }
-            body, .bg-gray-100 { background-color: white !important; }
-            .table-responsive td, .table-responsive th { white-space: normal !important; }
+        /* Base font */
+        body {
+            font-family: 'Inter', sans-serif;
         }
     </style>
 
     <script type="module">
-        // --- HARDCODED FIREBASE CONFIGURATION (CRITICAL) ---
-        // VERIFIED CONFIGURATION PROVIDED BY USER
-        const MANUAL_FIREBASE_CONFIG = {
-            apiKey: "AIzaSyAyDKqA-j9yjp4KeGPGR49Cr6_q_drxBVs",
-            authDomain: "otgaurdian.firebaseapp.com",
-            projectId: "otgaurdian",
-            storageBucket: "otgaurdian.firebasestorage.app",
-            messagingSenderId: "719542806938",
-            appId: "1:719542806938:web:ed9376fcc7d04851e47223",
-            measurementId: "G-9FMPGC5C93"
-        };
-        const APP_ID = MANUAL_FIREBASE_CONFIG.projectId;
-
-        // --- FIREBASE MODULE IMPORTS ---
         import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
-        import { getAuth, signInWithCustomToken, onAuthStateChanged, signOut, signInWithEmailAndPassword } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
-        import { getFirestore, doc, setDoc, collection, query, onSnapshot, serverTimestamp, setLogLevel, deleteDoc, getDocs, writeBatch } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+        import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged, signOut, signInWithEmailAndPassword, createUserWithEmailAndPassword } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getFirestore, doc, setDoc, collection, query, onSnapshot, serverTimestamp, setLogLevel, addDoc, getDoc, deleteDoc, where } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
 
-        // --- GLOBAL STATE ---
+        // Global Firebase and App State variables
+        let app = null;
+        let db = null;
+        let auth = null;
+        
+        // Provided environment variables (MUST BE USED)
+        const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
+        const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {
+            apiKey: "dummy-key",
+            authDomain: "dummy-domain.firebaseapp.com",
+            projectId: "default-app-id",
+            storageBucket: "dummy-bucket.appspot.com",
+            messagingSenderId: "123456789012",
+            appId: "1:123456789012:web:a1b2c3d4e5f6g7h8i9j0"
+        };
+        const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
+        
+        // Use the environment variable config
+        const MANUAL_FIREBASE_CONFIG = firebaseConfig;
+
+        // --- Application State ---
         const appState = {
-            isAuthReady: false,
             isFirebaseReady: false,
-            error: null,
-            db: null,
-            auth: null,
+            isAuthReady: false,
             userId: null,
-            appId: APP_ID,
-            currentUserEmail: null,
-           
-            // App Data
-            view: 'dashboard',
-            assets: [],
-            selectedAsset: null,
-            assetForm: createEmptyAssetForm(),
-           
-            // UI State
-            isModalOpen: false,
-            modalContent: {
-                type: '',
-                data: null,
-                loading: false,
-                message: ''
+            email: null,
+            appId: appId,
+            currentView: 'Dashboard', // Default view
+            error: null,
+            data: {
+                tasks: [],
+                sites: [],
+                users: [],
             },
+            modal: {
+                isOpen: false,
+                content: '',
+                onConfirm: null,
+                isConfirming: false,
+                confirmButtonText: 'Confirm',
+                title: 'Confirm Action',
+                type: 'confirm' // 'confirm', 'form', 'info'
+            },
+            sidebarOpen: false,
+            taskForm: {
+                id: null, // For editing
+                title: '',
+                siteId: '',
+                description: '',
+                severity: 'Medium',
+                status: 'Open',
+                dueDate: '',
+                assignedTo: ''
+            }
         };
 
-        // --- FIREBASE PATHS & HELPERS ---
+        // --- Firestore Utilities ---
 
         /**
-         * Determines the Firestore path for a user's private collection.
+         * Generates the public data path for a given collection.
          * @param {string} collectionName
          * @returns {string}
          */
-        const getUserCollectionPath = (collectionName) => {
-            if (!appState.appId || !appState.userId) {
-                console.error("Path Error: App ID or User ID is missing. Cannot proceed with DB operation.");
-                appState.error = "Authentication or Database connection required to save data.";
-                // Do not render here, rely on the main render loop to pick up the error
-                return null;
-            }
-            // Use the provided firestore security rule path
-            return `artifacts/${appState.appId}/users/${appState.userId}/${collectionName}`;
-        };
-
-        // --- UTILITY FUNCTIONS ---
-
-        const deepClone = (obj) => JSON.parse(JSON.stringify(obj));
-
-        /**
-         * Creates an empty form object for an OT Asset.
-         */
-        function createEmptyAssetForm() {
-            return {
-                id: null,
-                name: '',
-                category: 'PLC', // Default to PLC
-                ip_address: '',
-                firmware_version: '1.0.0',
-                criticality: 'Medium',
-                location: '',
-                vulnerabilities: [], // { id: string, name: string, score: number, status: string }
-                notes: '',
-            };
+        function getPublicCollectionPath(collectionName) {
+            return `artifacts/${appState.appId}/public/data/${collectionName}`;
         }
 
-        /**
-         * Generates a random IP address.
-         * @returns {string}
-         */
-        function generateRandomIP() {
-            return Array(4).fill(0).map(() => Math.floor(Math.random() * 255)).join('.');
-        }
-
-        // --- MOCK DATA GENERATION ---
-
-        const generateMockAssets = (count) => {
-            const categories = ["PLC", "HMI", "Server", "Application", "Firewall", "Historian"];
-            const criticalities = ["High", "Medium", "Low"];
-            const mockVulnerabilities = [
-                { id: 'CVE-2023-1234', name: 'Firmware Buffer Overflow', score: 9.8, status: 'Critical' },
-                { id: 'CVE-2023-5678', name: 'Weak Authentication Protocol', score: 7.5, status: 'High' },
-                { id: 'CVE-2023-9012', name: 'Default Credentials Exposed', score: 4.2, status: 'Medium' },
-                { id: 'CVE-2023-0000', name: 'Missing Patch - Security Update', score: 2.1, status: 'Low' },
-            ];
-            const assets = [];
-
-            for (let i = 1; i <= count; i++) {
-                const category = categories[Math.floor(Math.random() * categories.length)];
-                const criticality = criticalities[Math.floor(Math.random() * criticalities.length)];
-               
-                const asset = createEmptyAssetForm();
-                asset.name = `MOC-${category}-${String(i).padStart(3, '0')}`;
-                asset.category = category;
-                asset.ip_address = generateRandomIP();
-                asset.criticality = criticality;
-                asset.firmware_version = `V${Math.floor(Math.random() * 5)}.${Math.floor(Math.random() * 10)}`;
-                asset.location = `Site-A / Zone ${Math.floor(Math.random() * 3) + 1}`;
-                asset.notes = `Automatically generated asset for demonstration.`;
-
-                // Add 0, 1, or 2 random vulnerabilities
-                asset.vulnerabilities = [];
-                const numVulnerabilities = Math.floor(Math.random() * 3);
-                const availableVulnerabilities = [...mockVulnerabilities];
-
-                for (let j = 0; j < numVulnerabilities; j++) {
-                    const randomIndex = Math.floor(Math.random() * availableVulnerabilities.length);
-                    asset.vulnerabilities.push(deepClone(availableVulnerabilities.splice(randomIndex, 1)[0]));
-                }
-
-                assets.push(asset);
-            }
-            return assets;
-        };
-
-        const checkAndGenerateMockData = async () => {
-            if (!appState.db || !appState.userId) return;
-
-            const assetsPath = getUserCollectionPath('assets');
-            if (!assetsPath) return;
-
-            try {
-                // Check if collection is empty
-                const assetsRef = collection(appState.db, assetsPath);
-                const snapshot = await getDocs(assetsRef);
-
-                if (snapshot.empty) {
-                    console.log("Asset collection is empty. Generating 20 mock OT assets...");
-                    appState.modalContent.loading = true;
-                    appState.modalContent.message = "Populating 20 mock OT assets...";
-                    render();
-
-                    const mockAssets = generateMockAssets(20);
-                    await saveAssetsBatch(mockAssets); // Use the general batch save function
-                   
-                    console.log("Mock OT asset generation complete.");
-                } else {
-                    console.log(`Asset collection contains ${snapshot.size} records. Skipping mock data generation.`);
-                }
-            } catch (e) {
-                console.error("Error during mock data check/generation:", e);
-                appState.error = "Failed to check/generate mock data.";
-            } finally {
-                appState.modalContent.loading = false;
-                appState.modalContent.message = "";
-                render();
-            }
-        };
+        // --- State Management and Rendering ---
 
         /**
-         * Saves a batch of asset objects to Firestore. Used for both mock data and CSV upload.
-         * @param {Array<object>} assets - Array of asset objects (excluding ID)
+         * Renders the application content by updating the DOM.
          */
-        const saveAssetsBatch = async (assets) => {
-            if (!appState.db || !appState.userId) throw new Error("Authentication or DB connection required.");
-            const assetsPath = getUserCollectionPath('assets');
-            if (!assetsPath) throw new Error("Invalid asset collection path.");
+        function render() {
+            const appEl = document.getElementById('app');
+            if (!appEl) return;
 
-            const batch = writeBatch(appState.db);
-            const assetsRef = collection(appState.db, assetsPath);
-
-            assets.forEach(asset => {
-                const newDocRef = doc(assetsRef);
-                const dataToSave = { ...asset };
-                delete dataToSave.id;
-               
-                // Store arrays as string (vulnerabilities) to comply with Firestore constraints
-                // Ensure vulnerabilities field exists and is an array before stringifying
-                if (!Array.isArray(dataToSave.vulnerabilities)) {
-                    dataToSave.vulnerabilities = [];
-                }
-                dataToSave.vulnerabilities = JSON.stringify(dataToSave.vulnerabilities);
-               
-                batch.set(newDocRef, {
-                    ...dataToSave,
-                    createdAt: serverTimestamp(),
-                    updatedAt: serverTimestamp()
-                });
-            });
-
-            await batch.commit();
-            return assets.length;
-        };
-
-
-        // --- CSV IMPORT LOGIC ---
-
-        /**
-         * Parses CSV text into an array of asset objects.
-         * Expects headers: name, category, ip_address, firmware_version, criticality, location, notes
-         * @param {string} csvText
-         * @returns {Array<object>} Parsed assets
-         */
-        const parseCSV = (csvText) => {
-            const lines = csvText.trim().split('\n');
-            if (lines.length === 0) return [];
-           
-            const headers = lines[0].split(',').map(h => h.trim().toLowerCase());
-            const requiredHeaders = ['name', 'ip_address'];
-           
-            // Basic header validation
-            if (!requiredHeaders.every(h => headers.includes(h))) {
-                throw new Error(`CSV is missing required headers: ${requiredHeaders.join(', ')}`);
-            }
-
-            const assets = [];
-            for (let i = 1; i < lines.length; i++) {
-                const values = lines[i].split(',');
-                if (values.length !== headers.length) {
-                    console.warn(`Skipping line ${i + 1}: Column count mismatch.`);
-                    continue;
-                }
-               
-                const asset = createEmptyAssetForm();
-                headers.forEach((header, index) => {
-                    const value = values[index].trim();
-                    if (header in asset && value) {
-                        asset[header] = value;
-                    }
-                });
-
-                // Ensure required fields are present
-                if (!asset.name || !asset.ip_address) {
-                    console.warn(`Skipping line ${i + 1}: Name or IP Address missing.`);
-                    continue;
-                }
-               
-                // Ensure criticality is valid or default
-                const validCriticalities = ["High", "Medium", "Low"];
-                if (!validCriticalities.includes(asset.criticality)) {
-                    asset.criticality = 'Medium';
-                }
-
-                // Ensure category is valid or default
-                const validCategories = ["PLC", "HMI", "Server", "Application", "Firewall", "Historian", "Network Device", "Sensor"];
-                if (!validCategories.includes(asset.category)) {
-                    asset.category = 'PLC';
-                }
-
-                assets.push(asset);
-            }
-            return assets;
-        };
-
-        const handleCSVUpload = async (e) => {
-            e.preventDefault();
-            const fileInput = document.getElementById('csv_file');
-            if (!fileInput.files.length) {
-                appState.modalContent.message = "Please select a CSV file to upload.";
-                render();
+            if (appState.error) {
+                appEl.innerHTML = `<div class="p-8 text-center text-red-600 bg-red-100 rounded-lg m-4">${appState.error}</div>`;
                 return;
             }
 
-            const file = fileInput.files[0];
-            const reader = new FileReader();
+            if (!appState.isAuthReady) {
+                // Show a simple loading state until auth is checked
+                appEl.innerHTML = `
+                    <div class="flex items-center justify-center min-h-screen">
+                        <div class="text-center p-8 bg-white shadow-xl rounded-xl">
+                            <svg class="animate-spin h-8 w-8 text-indigo-600 mx-auto mb-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                                <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                                <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                            </svg>
+                            <p class="text-lg font-medium text-gray-700">Connecting to OT Guardian...</p>
+                        </div>
+                    </div>
+                `;
+                return;
+            }
 
-            reader.onload = async (event) => {
-                const csvText = event.target.result;
-                appState.modalContent.loading = true;
-                appState.modalContent.message = "Parsing and uploading assets...";
-                render();
+            // Main application structure
+            const currentViewFn = VIEWS[`${appState.currentView}View`];
+            const content = currentViewFn ? currentViewFn() : `
+                <div class="text-center p-12">
+                    <h2 class="text-2xl font-bold text-gray-800">404 - View Not Found</h2>
+                    <p class="text-gray-600 mt-2">The requested view (${appState.currentView}) could not be loaded.</p>
+                </div>
+            `;
 
+            appEl.innerHTML = `
+                <div class="min-h-screen flex">
+                    ${renderSidebar()}
+                    <div class="flex-1 flex flex-col overflow-hidden">
+                        ${renderNav()}
+                        <main class="flex-1 overflow-x-hidden overflow-y-auto bg-gray-100 p-4 md:p-6 custom-scrollbar">
+                            ${content}
+                        </main>
+                    </div>
+                </div>
+                ${renderModal()}
+            `;
+
+            // Re-run lucide icon replacement
+            if (window.lucide) {
+                window.lucide.createIcons();
+            }
+
+            // Close sidebar on navigation click on mobile
+            if (appState.sidebarOpen) {
+                toggleSidebar();
+            }
+        }
+
+        // --- Authentication Logic ---
+
+        /**
+         * Attempts to sign in using the provided initial custom token.
+         */
+        async function attemptCustomTokenSignIn() {
+            try {
+                if (initialAuthToken) {
+                    await signInWithCustomToken(auth, initialAuthToken);
+                    console.log("Custom token sign-in successful.");
+                } else {
+                    console.warn("No environment token found. Signing in anonymously.");
+                    await signInAnonymously(auth);
+                }
+            } catch (e) {
+                // If custom token fails, fall back to anonymous or just log the error
+                console.error("Custom token sign-in failed. Attempting Anonymous Sign-in.", e);
                 try {
-                    const newAssets = parseCSV(csvText);
-
-                    if (newAssets.length === 0) {
-                        throw new Error("No valid assets found in the CSV file.");
-                    }
-
-                    const count = await saveAssetsBatch(newAssets);
-                   
-                    appState.modalContent.message = `Successfully imported ${count} assets!`;
-                    appState.modalContent.type = 'import_success'; // Change modal type for success message
-                   
-                } catch (error) {
-                    console.error("CSV Import Error:", error);
-                    appState.modalContent.message = `Import failed: ${error.message}`;
-                } finally {
-                    appState.modalContent.loading = false;
+                    await signInAnonymously(auth);
+                } catch (anonError) {
+                    console.error("Anonymous sign-in also failed:", anonError);
+                    appState.error = "Failed to sign in. Please check console.";
                     render();
                 }
-            };
-
-            reader.onerror = () => {
-                appState.modalContent.loading = false;
-                appState.modalContent.message = "Failed to read the file.";
-                render();
-            };
-
-            reader.readAsText(file);
-        };
-
-
-        // --- AUTH & FIREBASE INITIALIZATION ---
-
-        const attemptCustomTokenSignIn = async () => {
-            const auth = appState.auth;
-            if (!auth) return;
-
-            const token = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
-
-            try {
-                if (token) {
-                    await signInWithCustomToken(auth, token);
-                    console.log("Signed in with environment token.");
-                } else {
-                    console.log("No environment token found. Waiting for user login.");
-                }
-            } catch (e) {
-                console.warn("Environment token sign-in failed. This is expected if the token is old/invalid:", e.message);
             }
-        };
+        }
 
-        const handleSignInSubmit = async (e) => {
-            e.preventDefault();
-            const form = e.target;
-            const email = form.email.value;
-            const password = form.password.value;
-
-            appState.modalContent.loading = true;
-            appState.modalContent.message = "Signing in...";
-            render();
-
-            try {
-                await signInWithEmailAndPassword(appState.auth, email, password);
-                console.log("Signed in successfully via email/password.");
-                // User state change handled by onAuthStateChanged -> updateAuthState
-                closeModal();
-            } catch (e) {
-                let errorMessage = "Sign In Failed. Please check your credentials.";
-                if (e.code === 'auth/user-not-found' || e.code === 'auth/invalid-credential') errorMessage = 'Invalid email or password.';
-               
-                appState.modalContent.message = errorMessage;
-                console.error("Sign-in error:", e);
-                appState.error = errorMessage;
-            } finally {
-                appState.modalContent.loading = false;
-                render();
-            }
-        };
-
-        const updateAuthState = (user) => {
+        /**
+         * Updates the global state when the Firebase Auth state changes.
+         * @param {firebase.User} user
+         */
+        function updateAuthState(user) {
             if (user) {
                 appState.userId = user.uid;
-                appState.currentUserEmail = user.email || 'Authenticated User';
-                console.log(`User state changed. UID: ${user.uid}`);
-               
+                appState.email = user.email; // Will be null for anonymous users
+                
+                // If it's the first time the auth state is ready, set up listeners
                 if (!appState.isAuthReady) {
-                    subscribeToData();
-                    checkAndGenerateMockData();
+                    setupDataListeners();
+                    // If the user signed in anonymously (which happens if no token), nudge them to log in/register
+                    if (user.isAnonymous) {
+                         // Open the LogIn modal automatically for anonymous users to prompt them to register/login
+                         openModal(VIEWS.LogInView(), 'Sign In or Register', 'info');
+                    }
                 }
             } else {
                 appState.userId = null;
-                appState.currentUserEmail = null;
-                appState.assets = [];
-                // If signed out, default to showing the sign-in modal
-                if(appState.isFirebaseReady) openModal('sign_in');
+                appState.email = null;
+                // If the user logs out, reset view and data
+                appState.currentView = 'Dashboard';
+                appState.data.tasks = [];
+                appState.data.sites = [];
+                appState.data.users = [];
             }
             appState.isAuthReady = true;
             render();
-        };
+        }
 
         /**
-         * Defensive initialization for Firebase modules.
+         * Handles user sign-out.
          */
-        const initFirebase = async () => {
-            if (typeof initializeApp === 'undefined' || typeof getAuth === 'undefined' || typeof getFirestore === 'undefined') {
-                console.error("CRITICAL: Firebase modules failed to load from CDN. Check network connection.");
-                appState.error = `CRITICAL: Firebase modules failed to load. Cannot connect to database. App ID: ${APP_ID}.`;
-                appState.isAuthReady = true;
-                appState.isFirebaseReady = false;
+        async function handleSignOut() {
+            try {
+                closeModal();
+                // Instead of just signing out, sign out and then sign back in anonymously
+                await signOut(auth);
+                await signInAnonymously(auth);
+                appState.error = null;
+            } catch (e) {
+                console.error("Sign out error:", e);
+                appState.error = "Sign out failed. See console for details.";
                 render();
-                return;
             }
+        }
+
+        /**
+         * Handles user login/registration.
+         * @param {Event} e 
+         */
+        async function handleAuthFormSubmit(e) {
+            e.preventDefault();
+            
+            const formType = e.target.getAttribute('data-form-type');
+            const email = e.target.email.value;
+            const password = e.target.password.value;
+            const isRegister = formType === 'register';
+
+            appState.modal.isConfirming = true;
+            renderModal();
 
             try {
-                // Initialize using the hardcoded configuration
-                const app = initializeApp(MANUAL_FIREBASE_CONFIG);
-                appState.db = getFirestore(app);
-                appState.auth = getAuth(app);
-                setLogLevel('debug');
-               
-                appState.isFirebaseReady = true;
-                console.log("Firebase initialized successfully.");
-
-                // Set up auth listener (this updates appState.isAuthReady and calls render/data listeners)
-                onAuthStateChanged(appState.auth, updateAuthState);
-
-                // Start the sign-in process (checks for environment token)
-                await attemptCustomTokenSignIn();
-
-            } catch (e) {
-                console.error("Fatal Firebase Initialization Error:", e);
-                appState.error = `Fatal Firebase Error: ${e.message}. App ID: ${APP_ID}`;
-                appState.isAuthReady = true;
-                appState.isFirebaseReady = false;
-                render();
+                if (isRegister) {
+                    await createUserWithEmailAndPassword(auth, email, password);
+                    await saveUserProfile(email, auth.currentUser.uid);
+                    appState.error = null;
+                } else {
+                    await signInWithEmailAndPassword(auth, email, password);
+                    appState.error = null;
+                }
+                closeModal();
+            } catch (error) {
+                console.error("Auth Error:", error);
+                // Update modal content to show error without closing
+                const errorMsg = error.message.includes('email-already-in-use') ? "Email already in use. Please log in or use a different email." :
+                                 error.message.includes('wrong-password') || error.message.includes('user-not-found') ? "Invalid email or password." :
+                                 error.message.includes('weak-password') ? "Password must be at least 6 characters." :
+                                 "Authentication failed. See console for details.";
+                document.getElementById('auth-error-message').innerText = errorMsg;
+            } finally {
+                appState.modal.isConfirming = false;
+                renderModal();
             }
-        };
-
-        // --- FIRESTORE DATA HANDLING ---
+        }
 
         /**
-         * Sets up real-time listeners for all necessary data (assets).
+         * Saves a basic user profile (public data) after registration.
+         * @param {string} email 
+         * @param {string} uid 
          */
-        const subscribeToData = () => {
-            if (!appState.db || !appState.userId || !appState.appId) {
-                console.warn("Cannot subscribe to data: DB or User/App ID missing. Waiting for authentication.");
+        async function saveUserProfile(email, uid) {
+            if (!db) return;
+            const userRef = doc(db, getPublicCollectionPath('users'), uid);
+            await setDoc(userRef, {
+                userId: uid,
+                email: email,
+                role: 'Analyst', // Default role
+                createdAt: serverTimestamp()
+            }, { merge: true });
+        }
+
+
+        // --- Data Listeners ---
+
+        /**
+         * Sets up real-time Firestore listeners for core application data.
+         */
+        function setupDataListeners() {
+            if (!db || !appState.userId) {
+                console.warn("Firestore or User ID not ready for listener setup.");
                 return;
             }
+            console.log("Setting up data listeners for user:", appState.userId);
 
-            const assetsPath = getUserCollectionPath('assets');
-            if (!assetsPath) return;
+            // 1. Tasks Listener (Public data)
+            const tasksColRef = collection(db, getPublicCollectionPath('tasks'));
+            const tasksQuery = query(tasksColRef);
 
-            const assetsRef = collection(appState.db, assetsPath);
-            const q = query(assetsRef);
-
-            onSnapshot(q, (snapshot) => {
-                const newAssets = [];
-                snapshot.forEach(doc => {
-                    const data = doc.data();
-                    let vulnerabilities = data.vulnerabilities || '[]';
-                   
-                    // Always try to parse JSON stringified arrays
-                    if (typeof vulnerabilities === 'string') {
-                        try {
-                            vulnerabilities = JSON.parse(vulnerabilities);
-                        } catch (e) {
-                            console.error("Error parsing vulnerabilities:", e);
-                            vulnerabilities = [];
-                        }
-                    }
-                    // Ensure it is an array in case parsing failed or data was old format
-                    if (!Array.isArray(vulnerabilities)) {
-                        vulnerabilities = [];
-                    }
-
-
-                    newAssets.push({
-                        id: doc.id,
-                        ...data,
-                        vulnerabilities: vulnerabilities,
-                        name: data.name || 'Untitled Asset',
-                        category: data.category || 'Unknown',
-                        criticality: data.criticality || 'Low',
-                    });
+            onSnapshot(tasksQuery, (snapshot) => {
+                appState.data.tasks = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+                // Sort tasks by severity (High, Medium, Low) and then by Due Date
+                const severityOrder = { 'High': 3, 'Medium': 2, 'Low': 1 };
+                appState.data.tasks.sort((a, b) => {
+                    const sevA = severityOrder[a.severity] || 0;
+                    const sevB = severityOrder[b.severity] || 0;
+                    if (sevA !== sevB) return sevB - sevA;
+                    // Then sort by due date
+                    return new Date(a.dueDate || '3000-01-01') - new Date(b.dueDate || '3000-01-01');
                 });
-
-                // Sort assets alphabetically by name
-                newAssets.sort((a, b) => a.name.localeCompare(b.name));
-
-                appState.assets = newAssets;
-                console.log(`Fetched ${newAssets.length} OT assets.`);
-
-                // Update selected asset if data changed
-                if (appState.selectedAsset) {
-                    const updatedAsset = newAssets.find(p => p.id === appState.selectedAsset.id);
-                    // Crucially update both selectedAsset and the form data
-                    appState.selectedAsset = updatedAsset ? deepClone(updatedAsset) : null;
-                    appState.assetForm = updatedAsset ? deepClone(updatedAsset) : createEmptyAssetForm();
-
-                    if (!updatedAsset && appState.view === 'asset_detail') {
-                        appState.view = 'asset_list';
-                    }
-                }
-
                 render();
             }, (error) => {
-                console.error("Error listening to assets collection:", error);
-                appState.error = "Failed to load asset data in real-time.";
+                console.error("Tasks listener failed:", error);
+                appState.error = "Failed to load tasks. See console for details.";
                 render();
             });
-        };
+
+            // 2. Sites/Assets Listener (Public data)
+            const sitesColRef = collection(db, getPublicCollectionPath('sites'));
+            const sitesQuery = query(sitesColRef);
+
+            onSnapshot(sitesQuery, (snapshot) => {
+                appState.data.sites = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+                render();
+            }, (error) => {
+                console.error("Sites listener failed:", error);
+                appState.error = "Failed to load sites/assets. See console for details.";
+                render();
+            });
+            
+            // 3. Users Listener (Public data)
+            const usersColRef = collection(db, getPublicCollectionPath('users'));
+            const usersQuery = query(usersColRef);
+
+            onSnapshot(usersQuery, (snapshot) => {
+                appState.data.users = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+                render();
+            }, (error) => {
+                console.error("Users listener failed:", error);
+                appState.error = "Failed to load user list. See console for details.";
+                render();
+            });
+        }
+
+        // --- Navigation and UI Helpers ---
 
         /**
-         * Saves or updates an asset record.
-         * @param {object} assetData
+         * Changes the current view.
+         * @param {string} viewName - The name of the view to switch to.
          */
-        const saveAsset = async (assetData) => {
-            if (!appState.db || !appState.userId) {
-                appState.error = "Authentication or Database connection required to save data.";
-                render();
-                return;
-            }
+        function navigate(viewName) {
+            appState.currentView = viewName;
+            render();
+        }
 
-            const assetsPath = getUserCollectionPath('assets');
-            if (!assetsPath) return;
+        /**
+         * Toggles the mobile sidebar visibility.
+         */
+        function toggleSidebar() {
+            appState.sidebarOpen = !appState.sidebarOpen;
+            render();
+        }
 
-            const dataToSave = { ...assetData };
-            delete dataToSave.id;
+        // --- Modal Logic ---
 
-            // Convert array of objects (vulnerabilities) to JSON string
-            dataToSave.vulnerabilities = JSON.stringify(Array.isArray(dataToSave.vulnerabilities) ? dataToSave.vulnerabilities : []);
-           
-            try {
-                const docRef = assetData.id
-                    ? doc(appState.db, assetsPath, assetData.id)
-                    : doc(collection(appState.db, assetsPath));
-               
-                await setDoc(docRef, {
-                    ...dataToSave,
-                    updatedAt: serverTimestamp(),
-                    ...(assetData.id ? {} : { createdAt: serverTimestamp() })
-                }, { merge: true });
+        /**
+         * Opens the modal with dynamic content and optional confirmation handler.
+         * @param {string} contentHtml - The HTML content for the modal body.
+         * @param {string} [title='Confirm Action'] - The title of the modal.
+         * @param {string} [type='confirm'] - 'confirm', 'form', or 'info'.
+         * @param {function} [onConfirm=null] - The callback function for the confirm button.
+         * @param {string} [confirmButtonText='Confirm'] - Text for the confirm button.
+         */
+        function openModal(contentHtml, title = 'Confirm Action', type = 'confirm', onConfirm = null, confirmButtonText = 'Confirm') {
+            appState.modal = {
+                isOpen: true,
+                content: contentHtml,
+                onConfirm: onConfirm,
+                isConfirming: false,
+                confirmButtonText: confirmButtonText,
+                title: title,
+                type: type
+            };
+            renderModal();
+        }
 
-                console.log("Asset saved successfully. ID:", assetData.id || docRef.id);
-               
-                if (appState.view === 'edit_asset') {
-                    // Navigate to detail view if it's an existing asset, or list if new
-                    appState.view = assetData.id ? 'asset_detail' : 'asset_list';
-                    if (assetData.id) {
-                         // Force re-selection to update the detail view instantly if needed
-                         appState.selectedAsset = deepClone(assetData);
-                    }
+        /**
+         * Closes the modal.
+         */
+        function closeModal() {
+            appState.modal.isOpen = false;
+            appState.modal.onConfirm = null;
+            renderModal();
+        }
+
+        /**
+         * Handles the confirmation button click inside the modal.
+         */
+        async function handleModalConfirm() {
+            if (appState.modal.onConfirm) {
+                appState.modal.isConfirming = true;
+                renderModal();
+                try {
+                    await appState.modal.onConfirm();
+                } catch (e) {
+                    console.error("Modal confirmation failed:", e);
+                    // Optionally display error within the modal
+                } finally {
+                    appState.modal.isConfirming = false;
+                    closeModal(); // Close after success or failure, or handle error inside the modal content
                 }
+            } else {
                 closeModal();
-                render();
-
-            } catch (e) {
-                console.error("Error saving asset:", e);
-                appState.error = "Failed to save asset record. Check console for details.";
-                render();
             }
-        };
-
+        }
+        
         /**
-         * Deletes an asset record.
-         * @param {string} assetId
+         * Renders only the modal component.
          */
-        const deleteAsset = async (assetId) => {
-            if (!appState.db || !appState.userId || !assetId) {
-                 appState.error = "Authentication or Database connection required to delete data.";
-                render();
+        function renderModal() {
+            const modalEl = document.getElementById('modal-container');
+            if (!modalEl) return;
+            
+            if (!appState.modal.isOpen) {
+                modalEl.innerHTML = '';
                 return;
             }
 
-            const assetsPath = getUserCollectionPath('assets');
-            if (!assetsPath) return;
-
-            try {
-                const docRef = doc(appState.db, assetsPath, assetId);
-                await deleteDoc(docRef);
-
-                console.log("Asset deleted successfully. ID:", assetId);
-
-                appState.selectedAsset = null;
-                appState.view = 'asset_list';
-                closeModal();
-                render();
-            } catch (e) {
-                console.error("Error deleting asset:", e);
-                appState.error = "Failed to delete asset record.";
-                render();
-            }
-        };
-
-        // --- HANDLERS ---
-
-        const handleNavigate = (view, assetId = null) => {
-            appState.view = view;
-           
-            let asset = null;
-            if (assetId) {
-                asset = appState.assets.find(p => p.id === assetId);
-            }
-
-            appState.selectedAsset = asset ? deepClone(asset) : null;
-            appState.assetForm = asset ? deepClone(asset) : createEmptyAssetForm();
-           
-            if (view === 'edit_asset' && !assetId) {
-                appState.assetForm = createEmptyAssetForm();
-                appState.selectedAsset = null;
-            }
-            appState.error = null; // Clear error on navigation
-            closeModal();
-            render();
-        };
-
-        const openModal = (type, data = null) => {
-            appState.modalContent = { type, data, loading: false, message: '' };
-            appState.isModalOpen = true;
-            render();
-        };
-
-        const closeModal = () => {
-            appState.isModalOpen = false;
-            appState.modalContent = { type: '', data: null, loading: false, message: '' };
-            render();
-        };
-
-        const handleAssetFormChange = (e, field) => {
-            appState.assetForm[field] = e.target.value;
-            render();
-        };
-
-        const handleAssetFormSubmit = (e) => {
-            e.preventDefault();
-            if (!appState.assetForm.name || !appState.assetForm.ip_address) {
-                appState.error = "Asset Name and IP Address are required.";
-                render();
-                return;
-            }
-            appState.error = null;
-            saveAsset(appState.assetForm);
-        };
-       
-        const handleAddVulnerability = (e) => {
-            e.preventDefault();
-            const form = e.target;
-           
-            // Validate score input
-            const scoreValue = parseFloat(form.vuln_score.value);
-            if (isNaN(scoreValue) || scoreValue < 0 || scoreValue > 10) {
-                 appState.modalContent.message = "CVSS Score must be between 0.0 and 10.0.";
-                 render();
-                 return;
-            }
-
-            const newVulnerability = {
-                id: form.vuln_id.value || `VULN-${Math.random().toString(36).substring(2, 9).toUpperCase()}`,
-                name: form.vuln_name.value,
-                score: scoreValue,
-                status: form.vuln_status.value
-            };
-
-            const assetToUpdate = appState.selectedAsset ? deepClone(appState.selectedAsset) : null;
-            if (!assetToUpdate) {
-                console.error("No asset selected for vulnerability addition.");
-                closeModal();
-                return;
-            }
-
-            if (!assetToUpdate.vulnerabilities) {
-                assetToUpdate.vulnerabilities = [];
-            }
-           
-            assetToUpdate.vulnerabilities.push(newVulnerability);
-
-            // Update the form and selected asset state immediately (before save resolves)
-            appState.selectedAsset = assetToUpdate;
-            appState.assetForm = deepClone(assetToUpdate);
-
-            saveAsset(assetToUpdate);
-            // Modal closed in saveAsset on success
-        };
-
-        // --- RENDERING VIEWS ---
-
-        const renderNav = () => {
-            const navItems = [
-                { view: 'dashboard', label: 'Dashboard', icon: 'LayoutDashboard' },
-                { view: 'asset_list', label: 'Assets', icon: 'HardHat' },
-                { view: 'reports', label: 'Reports', icon: 'FileText' },
-                { view: 'settings', label: 'Settings', icon: 'Settings' }
-            ];
-
-            return `
-                <nav class="p-4 bg-white shadow-md print-hide">
-                    <div class="max-w-7xl mx-auto flex justify-between items-center">
-                        <div class="text-xl font-bold text-indigo-600">OT Guardian</div>
-                        ${appState.userId ? `
-                            <div class="flex space-x-4">
-                                ${navItems.map(item => `
-                                    <button onclick="handleNavigate('${item.view}')"
-                                        class="flex items-center space-x-2 p-2 rounded-lg transition duration-150 ease-in-out
-                                        ${appState.view === item.view ? 'bg-indigo-100 text-indigo-600 font-semibold' : 'text-gray-600 hover:bg-gray-100'}"
-                                        aria-current="${appState.view === item.view ? 'page' : 'false'}"
-                                    >
-                                        ${lucide.createIcons()[item.icon].toSvg({ class: 'w-5 h-5' })}
-                                        <span class="hidden sm:inline">${item.label}</span>
-                                    </button>
-                                `).join('')}
-                            </div>
-                            <div class="flex items-center space-x-3 text-sm text-gray-500">
-                                <span class="hidden sm:inline">${appState.currentUserEmail}</span>
-                                <button onclick="signOut(appState.auth).then(() => handleNavigate('dashboard')).catch(e => console.error('Sign out error:', e))"
-                                    class="bg-red-500 text-white p-2 rounded-lg hover:bg-red-600 transition duration-150 ease-in-out"
-                                >
-                                    ${lucide.createIcons().LogOut.toSvg({ class: 'w-4 h-4 inline' })}
-                                </button>
-                            </div>
-                        ` : `
-                            <button onclick="openModal('sign_in')"
-                                class="bg-indigo-600 text-white px-4 py-2 rounded-lg shadow-md hover:bg-indigo-700 transition duration-150 ease-in-out"
-                            >
-                                ${lucide.createIcons().LogIn.toSvg({ class: 'w-4 h-4 inline mr-1' })} Sign In
-                            </button>
-                        `}
-                    </div>
-                </nav>
-            `;
-        };
-
-        const renderContent = () => {
-            let content = '';
-
-            if (!appState.isFirebaseReady || !appState.isAuthReady) {
-                return renderLoadingState(appState.error);
-            }
-
-            if (!appState.userId) {
-                return renderSignedOutState();
-            }
-
-            if (appState.error) {
-                content += renderErrorState(appState.error);
-            }
-
-            switch (appState.view) {
-                case 'dashboard':
-                    content += renderDashboard();
-                    break;
-                case 'asset_list':
-                    content += renderAssetList();
-                    break;
-                case 'asset_detail':
-                    content += renderAssetDetail();
-                    break;
-                case 'settings':
-                    content += renderSettings();
-                    break;
-                case 'reports':
-                    content += renderReports();
-                    break;
-                case 'edit_asset':
-                    content += renderAssetForm(appState.assetForm);
-                    break;
-                default:
-                    content += renderDashboard();
-            }
-
-            return `
-                <main class="max-w-7xl mx-auto p-4 sm:p-6 lg:p-8">
-                    ${content}
-                </main>
-            `;
-        };
-
-        const renderLoadingState = (error = null) => `
-            <div class="flex flex-col items-center justify-center min-h-[50vh] text-center">
-                ${!error ? `
-                    <svg class="animate-spin h-10 w-10 text-indigo-600" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                        <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
-                        <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                    </svg>
-                    <p class="mt-4 text-lg font-medium text-gray-700">Initializing Firebase and checking authentication...</p>
-                ` : ''}
-               
-                ${error ? `<div class="mt-4 p-4 bg-red-100 text-red-700 rounded-lg shadow-sm">
-                    <h4 class="font-bold">CRITICAL ERROR:</h4>
-                    <p>${error}</p>
-                </div>` : ''}
-                <p class="mt-2 text-xs text-gray-500">App ID: ${APP_ID}</p>
-            </div>
-        `;
-       
-        const renderSignedOutState = () => `
-            <div class="flex flex-col items-center justify-center min-h-[50vh] text-center p-6 bg-indigo-50 rounded-xl border-2 border-indigo-300 shadow-xl">
-                ${lucide.createIcons().Lock.toSvg({ class: 'w-12 h-12 text-indigo-500' })}
-                <h2 class="mt-4 text-xl font-bold text-indigo-800">Access Restricted</h2>
-                <p class="mt-2 text-indigo-600">Please sign in to access your OT Security Asset inventory and data.</p>
-                <button onclick="openModal('sign_in')"
-                    class="mt-6 px-6 py-3 text-lg font-medium text-white bg-indigo-600 rounded-lg shadow-lg hover:bg-indigo-700 transition duration-150">
-                    Sign In Now
+            const isConfirmType = appState.modal.type === 'confirm';
+            const isFormType = appState.modal.type === 'form';
+            const isInfoType = appState.modal.type === 'info';
+            
+            const footerContent = isFormType ? `
+                <div id="auth-error-message" class="text-sm text-red-500 font-medium mb-2"></div>
+                <!-- Form handled by the content, buttons are outside the form to submit it -->
+                <button type="button" onclick="closeModal()" class="px-4 py-2 text-sm font-medium text-gray-700 bg-gray-200 rounded-lg hover:bg-gray-300 transition duration-150">
+                    Cancel
                 </button>
-                <div class="mt-6 p-3 bg-white rounded-lg text-left shadow-inner">
-                    <p class="text-sm font-semibold text-gray-700">Demo User Credentials (Use these to log in):</p>
-                    <ul class="text-xs text-gray-500 list-disc list-inside space-y-1 mt-1">
-                        <li>User 1: <code>CYBERMELB@GMAIL.COM</code>, Pass: <code>Root2026!adm</code></li>
-                        <li>User 2: <code>faysalhasan2001@yahoo.com</code>, Pass: <code>Eng2026!</code></li>
-                    </ul>
-                </div>
-            </div>
-        `;
-
-        const renderErrorState = (message) => `
-            <div class="mb-4 flex items-center p-4 bg-red-100 rounded-lg border border-red-300 shadow-sm text-red-800">
-                ${lucide.createIcons().AlertTriangle.toSvg({ class: 'w-6 h-6 flex-shrink-0 mr-3' })}
-                <div>
-                    <h4 class="font-bold">Error:</h4>
-                    <p class="text-sm">${message}</p>
-                </div>
-            </div>
-        `;
-
-        // --- DASHBOARD VIEW ---
-
-        const renderDashboard = () => {
-            const totalAssets = appState.assets.length;
-            const highCriticality = appState.assets.filter(a => a.criticality === 'High').length;
-            const vulnerableAssets = appState.assets.filter(a => Array.isArray(a.vulnerabilities) && a.vulnerabilities.length > 0).length;
-
-            return `
-                <h1 class="text-3xl font-extrabold text-gray-900 mb-6 border-b pb-2">OT Security Dashboard</h1>
-                <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
-                    ${renderDashboardCard('Total OT Assets', totalAssets, 'Server', 'text-indigo-600', 'bg-indigo-50')}
-                    ${renderDashboardCard('High Criticality Assets', highCriticality, 'AlertTriangle', 'text-red-600', 'bg-red-50')}
-                    ${renderDashboardCard('Assets with Vulnerabilities', vulnerableAssets, 'ShieldAlert', 'text-yellow-600', 'bg-yellow-50')}
-                </div>
-
-                <div class="mt-8">
-                    <h2 class="text-2xl font-semibold text-gray-800 mb-4">Quick Actions</h2>
-                    <div class="flex flex-wrap gap-4">
-                        <button onclick="handleNavigate('edit_asset')"
-                            class="flex items-center space-x-2 px-4 py-2 bg-indigo-600 text-white rounded-lg shadow-md hover:bg-indigo-700 transition duration-150">
-                            ${lucide.createIcons().Plus.toSvg({ class: 'w-5 h-5' })}
-                            <span>Add New Asset</span>
-                        </button>
-                        <button onclick="openModal('import_csv')"
-                            class="flex items-center space-x-2 px-4 py-2 bg-emerald-600 text-white rounded-lg shadow-md hover:bg-emerald-700 transition duration-150">
-                            ${lucide.createIcons().Upload.toSvg({ class: 'w-5 h-5' })}
-                            <span>Import Assets (CSV)</span>
-                        </button>
-                    </div>
-                </div>
-
-                <div class="mt-8">
-                    <h2 class="text-2xl font-semibold text-gray-800 mb-4">Top Vulnerable Assets (First 5)</h2>
-                    ${appState.assets.length > 0
-                        ? renderAssetTable(appState.assets.filter(a => Array.isArray(a.vulnerabilities) && a.vulnerabilities.length > 0).slice(0, 5))
-                        : '<p class="text-gray-500">No vulnerable assets found or no assets added yet.</p>'}
-                </div>
+                <button type="submit" form="modal-form" class="px-4 py-2 ml-3 text-sm font-medium text-white bg-indigo-600 rounded-lg hover:bg-indigo-700 transition duration-150 flex items-center justify-center disabled:opacity-50" ${appState.modal.isConfirming ? 'disabled' : ''}>
+                    ${appState.modal.isConfirming ? `<svg class="animate-spin -ml-1 mr-3 h-5 w-5 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg> Processing...` : appState.modal.confirmButtonText}
+                </button>
+            ` : isConfirmType ? `
+                <button onclick="closeModal()" class="px-4 py-2 text-sm font-medium text-gray-700 bg-gray-200 rounded-lg hover:bg-gray-300 transition duration-150">
+                    Cancel
+                </button>
+                <button onclick="handleModalConfirm()" class="px-4 py-2 ml-3 text-sm font-medium text-white bg-red-600 rounded-lg hover:bg-red-700 transition duration-150 flex items-center justify-center disabled:opacity-50" ${appState.modal.isConfirming ? 'disabled' : ''}>
+                    ${appState.modal.isConfirming ? `<svg class="animate-spin -ml-1 mr-3 h-5 w-5 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg> Processing...` : appState.modal.confirmButtonText}
+                </button>
+            ` : `
+                 <button onclick="closeModal()" class="px-4 py-2 text-sm font-medium text-white bg-indigo-600 rounded-lg hover:bg-indigo-700 transition duration-150">
+                    Close
+                </button>
             `;
-        };
 
-        const renderDashboardCard = (title, value, icon, iconColor, bgColor) => `
-            <div class="bg-white p-6 rounded-xl shadow-lg border border-gray-200">
-                <div class="flex items-center">
-                    <div class="p-3 rounded-full ${bgColor} ${iconColor} mr-4">
-                        ${lucide.createIcons()[icon].toSvg({ class: 'w-6 h-6' })}
-                    </div>
-                    <div>
-                        <p class="text-sm font-medium text-gray-500">${title}</p>
-                        <p class="text-3xl font-bold text-gray-900">${value}</p>
-                    </div>
-                </div>
-            </div>
-        `;
+            modalEl.innerHTML = `
+                <div class="fixed inset-0 z-50 overflow-y-auto" aria-labelledby="modal-title" role="dialog" aria-modal="true">
+                    <div class="flex items-end justify-center min-h-screen pt-4 px-4 pb-20 text-center sm:block sm:p-0">
+                        <!-- Background overlay -->
+                        <div class="fixed inset-0 bg-gray-500 bg-opacity-75 transition-opacity" aria-hidden="true" onclick="closeModal()"></div>
 
-        // --- ASSET LIST VIEW ---
-
-        const renderAssetList = () => `
-            <div class="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-6">
-                <h1 class="text-3xl font-extrabold text-gray-900 mb-4 sm:mb-0">Asset Inventory (${appState.assets.length})</h1>
-                <div class="flex space-x-3">
-                    <button onclick="openModal('import_csv')"
-                        class="flex items-center space-x-2 px-4 py-2 bg-emerald-600 text-white rounded-lg shadow-md hover:bg-emerald-700 transition duration-150">
-                        ${lucide.createIcons().Upload.toSvg({ class: 'w-5 h-5' })}
-                        <span>Import CSV</span>
-                    </button>
-                    <button onclick="handleNavigate('edit_asset')"
-                        class="flex items-center space-x-2 px-4 py-2 bg-indigo-600 text-white rounded-lg shadow-md hover:bg-indigo-700 transition duration-150">
-                        ${lucide.createIcons().Plus.toSvg({ class: 'w-5 h-5' })}
-                        <span>Add Asset</span>
-                    </button>
-                </div>
-            </div>
-           
-            ${appState.assets.length > 0
-                ? renderAssetTable(appState.assets)
-                : '<div class="p-6 bg-yellow-50 text-yellow-800 rounded-lg"><p>No OT asset records found. Start by adding a new asset or importing data via CSV.</p></div>'}
-        `;
-
-        const renderAssetTable = (assets) => `
-            <div class="bg-white shadow-xl rounded-xl overflow-x-auto">
-                <table class="min-w-full divide-y divide-gray-200 table-auto table-responsive">
-                    <thead class="bg-gray-50">
-                        <tr>
-                            <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Asset Name</th>
-                            <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Category</th>
-                            <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">IP Address</th>
-                            <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Criticality</th>
-                            <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Vulnerabilities</th>
-                            <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Actions</th>
-                        </tr>
-                    </thead>
-                    <tbody class="bg-white divide-y divide-gray-200">
-                        ${assets.map(p => `
-                            <tr class="hover:bg-indigo-50 transition duration-150 cursor-pointer">
-                                <td class="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900"
-                                    onclick="event.stopPropagation(); handleNavigate('asset_detail', '${p.id}')"
-                                >
-                                    ${p.name}
-                                </td>
-                                <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">${p.category}</td>
-                                <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500 font-mono">${p.ip_address}</td>
-                                <td class="px-6 py-4 whitespace-nowrap text-sm">
-                                    <span class="px-3 py-1 inline-flex text-xs leading-5 font-semibold rounded-full
-                                        ${p.criticality === 'High' ? 'bg-red-100 text-red-800' : p.criticality === 'Medium' ? 'bg-yellow-100 text-yellow-800' : 'bg-green-100 text-green-800'}">
-                                        ${p.criticality}
-                                    </span>
-                                </td>
-                                <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">${(Array.isArray(p.vulnerabilities) ? p.vulnerabilities.length : 0)} Found</td>
-                                <td class="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
-                                    <button onclick="event.stopPropagation(); handleNavigate('edit_asset', '${p.id}')"
-                                        class="text-indigo-600 hover:text-indigo-900 p-1 rounded-full hover:bg-indigo-100 transition" title="Edit Asset">
-                                        ${lucide.createIcons().Edit.toSvg({ class: 'w-5 h-5' })}
-                                    </button>
-                                </td>
-                            </tr>
-                        `).join('')}
-                    </tbody>
-                </table>
-            </div>
-        `;
-
-        // --- ASSET DETAIL VIEW ---
-
-        const renderAssetDetail = () => {
-            const a = appState.selectedAsset;
-            if (!a) {
-                return renderErrorState("Asset record not found or has been deleted.");
-            }
-           
-            // Defensive Array Handling
-            const vulnerabilitiesArray = Array.isArray(a.vulnerabilities) ? a.vulnerabilities : [];
-           
-            const maxVulnerabilityScore = vulnerabilitiesArray.reduce((max, v) => Math.max(max, v.score || 0), 0);
-            const overallRisk = vulnerabilitiesArray.length === 0 ? 'Low' : maxVulnerabilityScore >= 7.0 ? 'High' : maxVulnerabilityScore >= 4.0 ? 'Medium' : 'Low';
-
-            const getRiskClass = (risk) => {
-                if (risk === 'High') return 'bg-red-500';
-                if (risk === 'Medium') return 'bg-yellow-500';
-                return 'bg-green-500';
-            };
-
-            return `
-                <div class="flex justify-between items-start mb-6 print-hide">
-                    <button onclick="handleNavigate('asset_list')" class="flex items-center text-indigo-600 hover:text-indigo-800 transition">
-                        ${lucide.createIcons().ArrowLeft.toSvg({ class: 'w-5 h-5 mr-2' })}
-                        Back to Asset Inventory
-                    </button>
-                    <div class="flex space-x-3">
-                        <button onclick="window.print()" class="px-3 py-2 bg-gray-500 text-white rounded-lg shadow-md hover:bg-gray-600 transition duration-150">
-                            ${lucide.createIcons().Printer.toSvg({ class: 'w-5 h-5 inline mr-1' })} Print Report
-                        </button>
-                        <button onclick="handleNavigate('edit_asset', '${a.id}')"
-                            class="px-3 py-2 bg-indigo-600 text-white rounded-lg shadow-md hover:bg-indigo-700 transition duration-150">
-                            ${lucide.createIcons().Edit.toSvg({ class: 'w-5 h-5 inline mr-1' })} Edit
-                        </button>
-                        <button onclick="openModal('confirm_delete_asset', { id: '${a.id}', name: '${a.name}' })"
-                            class="px-3 py-2 bg-red-600 text-white rounded-lg shadow-md hover:bg-red-700 transition duration-150">
-                            ${lucide.createIcons().Trash2.toSvg({ class: 'w-5 h-5 inline mr-1' })} Remove
-                        </button>
-                    </div>
-                </div>
-
-                <div class="bg-white p-6 rounded-xl shadow-xl print-full">
-                    <header class="pb-4 mb-6 border-b-2 border-indigo-100">
-                        <h1 class="text-4xl font-extrabold text-gray-900">${a.name}</h1>
-                        <div class="mt-2 flex items-center space-x-4">
-                            <span class="px-3 py-1 text-sm font-semibold rounded-full ${getRiskClass(overallRisk)} text-white shadow-md">
-                                Overall Risk: ${overallRisk}
-                            </span>
-                            <span class="text-lg text-gray-600">Category: ${a.category}</span>
-                            <span>ID: <span class="text-sm font-mono bg-gray-100 p-1 rounded">${a.id}</span></span>
-                        </div>
-                    </header>
-
-                    <section class="grid grid-cols-1 md:grid-cols-3 gap-8 mb-8 border-b pb-6">
-                        <div class="space-y-3">
-                            <h2 class="text-xl font-semibold text-indigo-700 flex items-center">
-                                ${lucide.createIcons().Info.toSvg({ class: 'w-5 h-5 mr-2' })} Identity
-                            </h2>
-                            <p><strong>IP Address:</strong> <span class="font-mono text-sm bg-gray-100 p-1 rounded">${a.ip_address}</span></p>
-                            <p><strong>Firmware:</strong> ${a.firmware_version}</p>
-                            <p><strong>Criticality:</strong> ${a.criticality}</p>
-                        </div>
-                        <div class="space-y-3">
-                            <h2 class="text-xl font-semibold text-indigo-700 flex items-center">
-                                ${lucide.createIcons().MapPin.toSvg({ class: 'w-5 h-5 mr-2' })} Location
-                            </h2>
-                            <p><strong>Physical Location:</strong> ${a.location || 'N/A'}</p>
-                            <p><strong>System Notes:</strong></p>
-                            <p class="text-sm text-gray-600 whitespace-pre-wrap">${a.notes || 'No general notes recorded.'}</p>
-                        </div>
-                        <div class="space-y-3">
-                            <h2 class="text-xl font-semibold text-indigo-700 flex items-center">
-                                ${lucide.createIcons().Database.toSvg({ class: 'w-5 h-5 mr-2' })} Meta Data
-                            </h2>
-                            <p class="text-sm text-gray-600"><strong>Created:</strong> ${a.createdAt ? new Date(a.createdAt.toDate()).toLocaleString() : 'N/A'}</p>
-                            <p class="text-sm text-gray-600"><strong>Last Updated:</strong> ${a.updatedAt ? new Date(a.updatedAt.toDate()).toLocaleString() : 'N/A'}</p>
-                            <p><strong>User ID:</strong> <span class="font-mono text-xs break-all">${appState.userId}</span></p>
-                        </div>
-                    </section>
-                   
-                    <section>
-                        <h2 class="text-2xl font-semibold text-indigo-700 mb-4 flex items-center">
-                            ${lucide.createIcons().Bug.toSvg({ class: 'w-6 h-6 mr-2' })} Vulnerabilities (${vulnerabilitiesArray.length})
-                            <button onclick="openModal('add_vulnerability')" class="ml-auto px-3 py-1 text-sm bg-indigo-500 text-white rounded-lg hover:bg-indigo-600 transition print-hide">
-                                ${lucide.createIcons().Plus.toSvg({ class: 'w-4 h-4 inline mr-1' })} Add Vulnerability
-                            </button>
-                        </h2>
-                       
-                        ${vulnerabilitiesArray.length > 0
-                            ? `<div class="bg-gray-50 p-4 rounded-lg shadow-inner custom-scroll max-h-96 overflow-y-auto">
-                                ${vulnerabilitiesArray.map(v => `
-                                    <div class="flex justify-between items-center p-3 mb-2 rounded-lg border
-                                        ${v.score >= 7.0 ? 'border-red-300 bg-red-50' : v.score >= 4.0 ? 'border-yellow-300 bg-yellow-50' : 'border-green-300 bg-green-50'}">
-                                       
-                                        <div class="flex-grow">
-                                            <p class="font-bold text-gray-900">${v.name} (${v.id})</p>
-                                            <p class="text-sm text-gray-700">Status: ${v.status} | CVSS Score: ${v.score}</p>
-                                        </div>
-                                       
-                                        <div class="flex space-x-2 print-hide">
-                                            <!-- Action buttons for vulnerabilities can be added here -->
+                        <!-- Modal content container -->
+                        <span class="hidden sm:inline-block sm:align-middle sm:h-screen" aria-hidden="true">&#8203;</span>
+                        <div class="inline-block align-bottom bg-white rounded-lg text-left overflow-hidden shadow-xl transform transition-all sm:my-8 sm:align-middle sm:max-w-lg sm:w-full">
+                            <div class="bg-white px-4 pt-5 pb-4 sm:p-6 sm:pb-4">
+                                <div class="sm:flex sm:items-start">
+                                    <div class="mt-3 text-center sm:mt-0 sm:ml-4 sm:text-left w-full">
+                                        <h3 class="text-lg leading-6 font-medium text-gray-900 border-b pb-2 mb-4" id="modal-title">
+                                            ${appState.modal.title}
+                                        </h3>
+                                        <div class="mt-2 text-sm text-gray-500">
+                                            ${appState.modal.content}
                                         </div>
                                     </div>
-                                `).join('')}
-                            </div>`
-                            : '<p class="text-gray-500 italic p-4">No active vulnerabilities recorded for this asset.</p>'}
-                    </section>
+                                </div>
+                            </div>
+                            <div class="bg-gray-50 px-4 py-3 sm:px-6 sm:flex sm:flex-row-reverse">
+                                ${footerContent}
+                            </div>
+                        </div>
+                    </div>
                 </div>
             `;
-        };
+        }
 
-        // --- ASSET FORM VIEW ---
+        // --- CRUD Operations for Tasks ---
 
-        const renderAssetForm = (formData) => {
-            const isEdit = !!formData.id;
-            const title = isEdit ? `Edit Asset: ${formData.name}` : 'Add New OT Asset';
-            const categories = ["PLC", "HMI", "Server", "Application", "Firewall", "Historian", "Network Device", "Sensor"];
-            const criticalities = ["High", "Medium", "Low"];
+        /**
+         * Opens the modal for creating or editing a task.
+         * @param {string | null} taskId - The ID of the task to edit, or null for new task.
+         */
+        function showTaskModal(taskId = null) {
+            let task = appState.data.tasks.find(t => t.id === taskId);
+
+            if (taskId && task) {
+                // Editing existing task
+                appState.taskForm = {
+                    id: task.id,
+                    title: task.title || '',
+                    siteId: task.siteId || '',
+                    description: task.description || '',
+                    severity: task.severity || 'Medium',
+                    status: task.status || 'Open',
+                    dueDate: task.dueDate || '',
+                    assignedTo: task.assignedTo || ''
+                };
+            } else {
+                // Creating new task
+                appState.taskForm = {
+                    id: null,
+                    title: '',
+                    siteId: '',
+                    description: '',
+                    severity: 'Medium',
+                    status: 'Open',
+                    dueDate: '',
+                    assignedTo: appState.userId // Default assignment
+                };
+            }
+
+            openModal(VIEWS.TaskFormView(), taskId ? 'Edit Task' : 'Create New Task', 'form', null, taskId ? 'Save Changes' : 'Create Task');
+        }
+
+        /**
+         * Handles the submission of the task creation/editing form.
+         * @param {Event} e 
+         */
+        async function handleTaskCreation(e) {
+            e.preventDefault();
+            if (!db || !appState.userId) return;
+
+            const formData = new FormData(e.target);
+            const taskData = Object.fromEntries(formData.entries());
+
+            // Update appState.taskForm with current form values for persistence
+            appState.taskForm = { ...appState.taskForm, ...taskData };
+            
+            // Clean and finalize data for Firestore
+            const finalTaskData = {
+                ...taskData,
+                siteId: taskData.siteId, // Site ID
+                severity: taskData.severity,
+                status: taskData.status,
+                dueDate: taskData.dueDate,
+                assignedTo: taskData.assignedTo,
+                lastUpdatedBy: appState.userId,
+                updatedAt: serverTimestamp()
+            };
+
+            appState.modal.isConfirming = true;
+            renderModal();
+            
+            try {
+                if (appState.taskForm.id) {
+                    // Update existing task
+                    const taskRef = doc(db, getPublicCollectionPath('tasks'), appState.taskForm.id);
+                    await setDoc(taskRef, finalTaskData, { merge: true });
+                } else {
+                    // Create new task
+                    const tasksColRef = collection(db, getPublicCollectionPath('tasks'));
+                    await addDoc(tasksColRef, {
+                        ...finalTaskData,
+                        createdBy: appState.userId,
+                        createdAt: serverTimestamp()
+                    });
+                }
+                closeModal();
+                // Optionally navigate back to Dashboard or Task Overview
+                navigate('TaskOverview'); 
+            } catch (e) {
+                console.error("Error saving task:", e);
+                // Simple error display for now
+                document.getElementById('task-form-error').innerText = "Error saving task. Check console.";
+            } finally {
+                appState.modal.isConfirming = false;
+                renderModal();
+            }
+        }
+
+        /**
+         * Prepares and opens the confirmation modal for task deletion.
+         * @param {string} taskId 
+         */
+        function confirmDeleteTask(taskId) {
+            const task = appState.data.tasks.find(t => t.id === taskId);
+            if (!task) return;
+
+            const content = `Are you sure you want to delete the task: **${task.title}**? This action cannot be undone.`;
+            openModal(
+                content,
+                'Delete Task',
+                'confirm',
+                () => deleteTask(taskId),
+                'Delete Permanently'
+            );
+        }
+
+        /**
+         * Deletes a task from Firestore.
+         * @param {string} taskId 
+         */
+        async function deleteTask(taskId) {
+            if (!db || !taskId) return;
+            const taskRef = doc(db, getPublicCollectionPath('tasks'), taskId);
+            await deleteDoc(taskRef);
+            appState.error = null;
+        }
+
+        // --- Render Components (Views, Navigation, Sidebar) ---
+        
+        // --- VIEW COMPONENT DEFINITION (FIXES THE ORIGINAL ERROR) ---
+        // Define VIEWS object globally before any functions that rely on it
+        const VIEWS = {};
+        
+        /**
+         * Renders the mobile-friendly sidebar.
+         */
+        function renderSidebar() {
+            const navItems = [
+                { name: 'Dashboard', icon: 'layout-dashboard' },
+                { name: 'TaskOverview', label: 'Tasks', icon: 'list-checks' },
+                { name: 'SiteManagement', label: 'Sites & Assets', icon: 'factory' },
+                { name: 'UserManagement', label: 'Users & Roles', icon: 'users' },
+            ];
+
+            const navLinks = navItems.map(item => `
+                <a href="#" onclick="navigate('${item.name}')" class="flex items-center px-4 py-2 mt-2 text-sm font-medium ${appState.currentView === item.name ? 'bg-indigo-700 text-white shadow-md' : 'text-indigo-200 hover:bg-indigo-600'} transition-colors duration-200 rounded-lg">
+                    <i data-lucide="${item.icon}" class="w-5 h-5 mr-3"></i>
+                    <span>${item.label || item.name.replace(/([A-Z])/g, ' $1').trim()}</span>
+                </a>
+            `).join('');
 
             return `
-                <div class="flex justify-between items-center mb-6 print-hide">
-                    <h1 class="text-3xl font-extrabold text-gray-900">${title}</h1>
-                    <button onclick="handleNavigate('asset_list')" class="flex items-center text-indigo-600 hover:text-indigo-800 transition">
-                        ${lucide.createIcons().ArrowLeft.toSvg({ class: 'w-5 h-5 mr-2' })}
-                        Cancel
-                    </button>
-                </div>
-                <div class="bg-white p-6 rounded-xl shadow-xl">
-                    <form onsubmit="handleAssetFormSubmit(event)">
-                       
-                        <input type="hidden" name="id" value="${formData.id || ''}">
-
-                        <div class="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6">
-                            <!-- Name -->
-                            <div>
-                                <label for="name" class="block text-sm font-medium text-gray-700">Asset Name (Required)</label>
-                                <input type="text" id="name" name="name" required
-                                    value="${formData.name}"
-                                    oninput="handleAssetFormChange(event, 'name')"
-                                    class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-lg shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500"
-                                    placeholder="MOC-PLC-001"
-                                >
-                            </div>
-
-                            <!-- IP Address -->
-                            <div>
-                                <label for="ip_address" class="block text-sm font-medium text-gray-700">IP Address (Required)</label>
-                                <input type="text" id="ip_address" name="ip_address" required
-                                    value="${formData.ip_address}"
-                                    oninput="handleAssetFormChange(event, 'ip_address')"
-                                    class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-lg shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 font-mono"
-                                    placeholder="192.168.1.100"
-                                >
-                            </div>
-                        </div>
-                       
-                        <div class="grid grid-cols-1 md:grid-cols-3 gap-6 mb-6">
-                            <!-- Category -->
-                            <div>
-                                <label for="category" class="block text-sm font-medium text-gray-700">Asset Category</label>
-                                <select id="category" name="category"
-                                    onchange="handleAssetFormChange(event, 'category')"
-                                    class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-lg shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500"
-                                >
-                                    ${categories.map(c => `<option value="${c}" ${formData.category === c ? 'selected' : ''}>${c}</option>`).join('')}
-                                </select>
-                            </div>
-
-                            <!-- Criticality -->
-                            <div>
-                                <label for="criticality" class="block text-sm font-medium text-gray-700">Business Criticality</label>
-                                <select id="criticality" name="criticality"
-                                    onchange="handleAssetFormChange(event, 'criticality')"
-                                    class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-lg shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500"
-                                >
-                                    ${criticalities.map(c => `<option value="${c}" ${formData.criticality === c ? 'selected' : ''}>${c}</option>`).join('')}
-                                </select>
-                            </div>
-
-                            <!-- Firmware -->
-                            <div>
-                                <label for="firmware_version" class="block text-sm font-medium text-gray-700">Firmware/OS Version</label>
-                                <input type="text" id="firmware_version" name="firmware_version"
-                                    value="${formData.firmware_version}"
-                                    oninput="handleAssetFormChange(event, 'firmware_version')"
-                                    class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-lg shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500"
-                                    placeholder="V1.2.3 / Windows Server 2019"
-                                >
-                            </div>
-                        </div>
-                       
-                        <!-- Location -->
-                        <div class="mb-6">
-                            <label for="location" class="block text-sm font-medium text-gray-700">Physical Location / Zone</label>
-                            <input type="text" id="location" name="location"
-                                value="${formData.location}"
-                                oninput="handleAssetFormChange(event, 'location')"
-                                class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-lg shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500"
-                                placeholder="Site-B / Cell-Line 3 / DMZ"
-                            >
-                        </div>
-
-                        <!-- Notes -->
-                        <div class="mb-6">
-                            <label for="notes" class="block text-sm font-medium text-gray-700">General Notes</label>
-                            <textarea id="notes" name="notes"
-                                oninput="handleAssetFormChange(event, 'notes')"
-                                class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-lg shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500"
-                                rows="4" placeholder="Any relevant configuration or operational details."
-                            >${formData.notes}</textarea>
-                        </div>
-
-                        <div class="flex justify-end space-x-3 pt-4 border-t">
-                            <button type="button" onclick="handleNavigate('asset_list')"
-                                class="px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 transition"
-                            >
-                                Cancel
-                            </button>
-                            <button type="submit"
-                                class="px-4 py-2 text-sm font-medium text-white bg-indigo-600 rounded-lg shadow-md hover:bg-indigo-700 transition"
-                            >
-                                ${isEdit ? 'Save Changes' : 'Create Asset'}
-                            </button>
-                        </div>
-                    </form>
+                <div class="fixed inset-y-0 left-0 w-64 bg-indigo-800 text-white p-4 z-40 sidebar-transition ${appState.sidebarOpen ? 'sidebar-visible' : '-translate-x-full'} md:relative md:translate-x-0 md:flex md:flex-col print-hide shadow-lg">
+                    <div class="text-2xl font-bold mb-6 flex items-center justify-between">
+                        OT Guardian
+                        <button class="md:hidden text-indigo-200 hover:text-white" onclick="toggleSidebar()">
+                            <i data-lucide="x" class="w-6 h-6"></i>
+                        </button>
+                    </div>
+                    <nav class="flex-1 space-y-2 custom-scrollbar overflow-y-auto">
+                        ${navLinks}
+                    </nav>
                 </div>
             `;
-        };
+        }
 
-        // --- REPORTS VIEW ---
+        /**
+         * Renders the top navigation bar.
+         */
+        function renderNav() {
+            const userStatus = appState.userId ? 
+                (appState.email ? `<i data-lucide="mail" class="w-4 h-4 mr-1"></i> ${appState.email}` : `<i data-lucide="user" class="w-4 h-4 mr-1"></i> Anonymous User`) : 
+                'Not Signed In';
 
-        const renderReports = () => `
-            <h1 class="text-3xl font-extrabold text-gray-900 mb-6 border-b pb-2">Vulnerability & Risk Reports</h1>
-            <div class="bg-white p-6 rounded-xl shadow-xl space-y-4">
-                <p class="text-lg text-gray-700">Generate reports on your OT security posture.</p>
-                <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
-                    <button disabled class="px-4 py-3 bg-gray-100 text-gray-500 rounded-lg border border-gray-300">
-                        Vulnerability Summary (Coming Soon)
+            let authButtons = '';
+            if (appState.userId && !auth.currentUser.isAnonymous) {
+                authButtons = `
+                    <button onclick="openModal('You are about to sign out. Are you sure?', 'Sign Out', 'confirm', handleSignOut, 'Yes, Sign Out')" class="ml-4 flex items-center text-sm font-medium text-red-600 hover:text-red-700 transition duration-150">
+                        <i data-lucide="log-out" class="w-5 h-5 mr-1"></i>
+                        Sign Out
                     </button>
-                    <button disabled class="px-4 py-3 bg-gray-100 text-gray-500 rounded-lg border border-gray-300">
-                        Top 10 Riskiest Assets (Coming Soon)
+                `;
+            } else {
+                 authButtons = `
+                    <button onclick="openModal(VIEWS.LogInView(), 'Sign In or Register', 'form', handleAuthFormSubmit, 'Submit')" class="ml-4 flex items-center px-3 py-1 bg-indigo-600 text-white rounded-lg text-sm font-medium hover:bg-indigo-700 transition duration-150">
+                        <i data-lucide="log-in" class="w-4 h-4 mr-1"></i>
+                        Log In
                     </button>
-                    ${appState.assets.length > 0 ? `
-                        <button onclick="handleNavigate('asset_detail', '${appState.assets[0].id}')"
-                            class="px-4 py-3 bg-indigo-100 text-indigo-700 rounded-lg border border-indigo-300 hover:bg-indigo-200 transition">
-                            View Sample Asset Report
-                        </button>` : `
-                        <button disabled class="px-4 py-3 bg-gray-100 text-gray-500 rounded-lg border border-gray-300">
-                            No Assets to Report On
-                        </button>`
-                    }
-                </div>
-               
-                <h2 class="mt-8 text-xl font-semibold text-gray-800">Print Asset Records</h2>
-                <p class="text-gray-600">You can generate a detailed report for any asset by navigating to its detail page and clicking "Print Report".</p>
-
-                <div class="p-4 bg-blue-50 rounded-lg">
-                    <p class="text-sm text-blue-800 font-medium">This functionality is designed to provide clean, professional documentation for auditing and compliance.</p>
-                </div>
-            </div>
-        `;
-
-        // --- SETTINGS VIEW ---
-
-        const renderSettings = () => `
-            <h1 class="text-3xl font-extrabold text-gray-900 mb-6 border-b pb-2">Settings</h1>
-            <div class="bg-white p-6 rounded-xl shadow-xl space-y-6">
-                <section>
-                    <h2 class="text-xl font-semibold text-gray-800 mb-3">Account Information</h2>
-                    <div class="space-y-2 p-4 bg-gray-50 rounded-lg border">
-                        <p class="text-gray-700"><strong>User Email:</strong> ${appState.currentUserEmail}</p>
-                        <p class="text-gray-700"><strong>User ID:</strong> <span class="font-mono text-xs break-all">${appState.userId || 'N/A'}</span></p>
-                        <p class="text-gray-700"><strong>App Instance ID:</strong> <span class="font-mono text-xs">${appState.appId}</span></p>
-                    </div>
-                </section>
-
-                <section>
-                    <h2 class="text-xl font-semibold text-gray-800 mb-3">Authentication</h2>
-                    <button onclick="signOut(appState.auth).then(() => handleNavigate('dashboard'))"
-                        class="px-4 py-2 bg-red-500 text-white rounded-lg hover:bg-red-600 transition">
-                        ${lucide.createIcons().LogOut.toSvg({ class: 'w-5 h-5 inline mr-1' })} Sign Out
-                    </button>
-                    <p class="text-sm text-gray-500 mt-2">Sign out to clear your current user session.</p>
-                </section>
-               
-                <section>
-                    <h2 class="text-xl font-semibold text-gray-800 mb-3">Application Status</h2>
-                    <div class="space-y-2 p-4 ${appState.isFirebaseReady ? 'bg-green-50 border-green-300' : 'bg-red-50 border-red-300'} rounded-lg border">
-                        <p class="text-gray-800">Firebase Status: <span class="font-bold">${appState.isFirebaseReady ? 'Ready' : 'Failed'}</span></p>
-                        <p class="text-gray-800">Authentication Status: <span class="font-bold">${appState.userId ? 'Signed In' : 'Signed Out'}</span></p>
-                    </div>
-                </section>
-            </div>
-        `;
-
-        // --- SIGN IN FORM ---
-        const renderSignInForm = () => `
-            <h3 class="text-lg leading-6 font-medium text-gray-900 mb-4">Sign In to OT Guardian</h3>
-            ${appState.modalContent.message ? `
-                <div class="p-3 mb-4 text-sm text-red-700 bg-red-100 rounded-lg">${appState.modalContent.message}</div>
-            ` : `
-                <div class="p-3 mb-4 text-sm text-indigo-700 bg-indigo-100 rounded-lg">
-                    <p>Use one of the following demo credentials to log in:</p>
-                    <ul class="text-xs text-indigo-800 list-disc list-inside mt-1">
-                        <li>User 1: <code>CYBERMELB@GMAIL.COM</code> / <code>Root2026!adm</code></li>
-                        <li>User 2: <code>faysalhasan2001@yahoo.com</code> / <code>Eng2026!</code></li>
-                    </ul>
-                </div>
-            `}
-           
-            <form onsubmit="handleSignInSubmit(event)">
-                <div class="mb-4">
-                    <label for="email" class="block text-sm font-medium text-gray-700">Email</label>
-                    <input type="email" id="email" name="email" required
-                        class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-lg shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500"
-                        placeholder="CYBERMELB@GMAIL.COM"
-                    >
-                </div>
-                <div class="mb-6">
-                    <label for="password" class="block text-sm font-medium text-gray-700">Password</label>
-                    <input type="password" id="password" name="password" required
-                        class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-lg shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500"
-                        placeholder="Password"
-                    >
-                </div>
-               
-                <div class="flex justify-end space-x-3">
-                    <button type="button" onclick="closeModal()" class="px-4 py-2 text-gray-700 bg-gray-200 rounded-lg hover:bg-gray-300 transition">Cancel</button>
-                    <button type="submit"
-                        class="px-4 py-2 text-white bg-indigo-600 rounded-lg shadow-md hover:bg-indigo-700 transition"
-                        ${appState.modalContent.loading ? 'disabled' : ''}
-                    >
-                        ${appState.modalContent.loading ? 'Signing in...' : 'Sign In'}
-                    </button>
-                </div>
-            </form>
-        `;
-
-        // --- ADD VULNERABILITY FORM ---
-        const renderAddVulnerabilityForm = () => {
-            const currentAsset = appState.selectedAsset;
-            if (!currentAsset) return '<p class="text-red-500">Asset not selected.</p>';
+                `;
+            }
 
             return `
-                <h3 class="text-lg leading-6 font-medium text-gray-900 mb-4">Add Vulnerability to ${currentAsset.name}</h3>
-                ${appState.modalContent.message ? `
-                    <div class="p-3 mb-4 text-sm text-red-700 bg-red-100 rounded-lg">${appState.modalContent.message}</div>
-                ` : ''}
-                <form onsubmit="handleAddVulnerability(event)">
-                    <div class="mb-4">
-                        <label for="vuln_name" class="block text-sm font-medium text-gray-700">Vulnerability Name (Required)</label>
-                        <input type="text" id="vuln_name" name="vuln_name" required
-                            class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-lg shadow-sm focus:ring-red-500 focus:border-red-500"
-                            placeholder="e.g., Weak Authentication Protocol"
-                        >
+                <header class="flex items-center justify-between p-4 bg-white border-b print-hide shadow-sm">
+                    <button class="md:hidden text-gray-600 hover:text-gray-800" onclick="toggleSidebar()">
+                        <i data-lucide="menu" class="w-6 h-6"></i>
+                    </button>
+                    <div class="hidden md:block text-xl font-semibold text-gray-800">${appState.currentView.replace(/([A-Z])/g, ' $1').trim()}</div>
+                    
+                    <div class="flex items-center text-gray-600 text-sm">
+                        <span class="flex items-center mr-4">
+                            ${userStatus}
+                        </span>
+                        ${authButtons}
                     </div>
-                    <div class="grid grid-cols-2 gap-4 mb-4">
-                        <div>
-                            <label for="vuln_id" class="block text-sm font-medium text-gray-700">Identifier (e.g., CVE)</label>
-                            <input type="text" id="vuln_id" name="vuln_id"
-                                class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-lg shadow-sm focus:ring-indigo-500 focus:border-indigo-500"
-                                placeholder="e.g., CVE-2023-4567"
-                            >
-                        </div>
-                        <div>
-                            <label for="vuln_score" class="block text-sm font-medium text-gray-700">CVSS Score (0.0 - 10.0)</label>
-                            <input type="number" id="vuln_score" name="vuln_score" required step="0.1" min="0" max="10"
-                                class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-lg shadow-sm focus:ring-indigo-500 focus:border-indigo-500"
-                                value="7.5"
-                            >
-                        </div>
-                    </div>
-                    <div class="mb-6">
-                        <label for="vuln_status" class="block text-sm font-medium text-gray-700">Status</label>
-                        <select id="vuln_status" name="vuln_status" required
-                            class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-lg shadow-sm focus:ring-indigo-500 focus:border-indigo-500">
-                            <option value="Critical">Critical (P0)</option>
-                            <option value="High">High (P1)</option>
-                            <option value="Medium">Medium (P2)</option>
-                            <option value="Low">Low (P3)</option>
-                        </select>
-                    </div>
+                </header>
+            `;
+        }
 
-                    <div class="flex justify-end space-x-3">
-                        <button type="button" onclick="closeModal()" class="px-4 py-2 text-gray-700 bg-gray-200 rounded-lg hover:bg-gray-300 transition">Cancel</button>
-                        <button type="submit" class="px-4 py-2 text-white bg-indigo-600 rounded-lg hover:bg-indigo-700 transition">Add Vulnerability</button>
+        // ---------------------------------------------
+        // --- VIEW COMPONENTS (HTML Content Generators) ---
+        // ---------------------------------------------
+
+        /**
+         * Login/Registration Form View for Modal.
+         */
+        VIEWS.LogInView = () => {
+            return `
+                <form id="modal-form" data-form-type="login" onsubmit="handleAuthFormSubmit(event)" class="space-y-4">
+                    <p class="text-sm text-gray-700">Please sign in or register to access full application features.</p>
+                    <div>
+                        <label for="email" class="block text-sm font-medium text-gray-700">Email Address</label>
+                        <input type="email" id="email" name="email" required autocomplete="email" class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500">
+                    </div>
+                    <div>
+                        <label for="password" class="block text-sm font-medium text-gray-700">Password</label>
+                        <input type="password" id="password" name="password" required autocomplete="current-password" class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500">
+                    </div>
+                    <div class="flex justify-between items-center pt-2">
+                         <a href="#" onclick="document.getElementById('modal-form').setAttribute('data-form-type', 'register'); document.querySelector('#modal-form button[type=submit]').innerText = 'Register'; document.getElementById('modal-title').innerText = 'Register New Account'; return false;" class="text-sm text-indigo-600 hover:text-indigo-500">
+                            Need an account? Register
+                        </a>
+                        <a href="#" onclick="document.getElementById('modal-form').setAttribute('data-form-type', 'login'); document.querySelector('#modal-form button[type=submit]').innerText = 'Submit'; document.getElementById('modal-title').innerText = 'Sign In or Register'; return false;" class="text-sm text-gray-500 hover:text-gray-700">
+                            Already registered? Sign In
+                        </a>
                     </div>
                 </form>
             `;
         };
 
-        // --- CSV IMPORT MODAL ---
-        const renderImportCSVForm = () => `
-            <h3 class="text-lg leading-6 font-medium text-gray-900 mb-4">Import Assets from CSV</h3>
-           
-            ${appState.modalContent.loading ? `
-                <div class="p-3 mb-4 text-sm text-indigo-700 bg-indigo-100 rounded-lg">
-                    ${lucide.createIcons().Loader.toSvg({ class: 'w-4 h-4 inline mr-2 animate-spin' })}
-                    ${appState.modalContent.message}
+        /**
+         * Dashboard View.
+         */
+        VIEWS.DashboardView = () => {
+            const openTasks = appState.data.tasks.filter(t => t.status === 'Open').length;
+            const highSeverityTasks = appState.data.tasks.filter(t => t.severity === 'High' && t.status === 'Open').length;
+            const totalSites = appState.data.sites.length;
+            const anonWarning = auth.currentUser && auth.currentUser.isAnonymous ? `
+                <div class="bg-yellow-100 border-l-4 border-yellow-500 text-yellow-700 p-4 mb-6 rounded-lg" role="alert">
+                    <p class="font-bold">Anonymous Access</p>
+                    <p>You are currently signed in anonymously. To save and secure your data, please <a href="#" onclick="openModal(VIEWS.LogInView(), 'Sign In or Register', 'form', handleAuthFormSubmit, 'Submit')" class="font-medium underline text-yellow-800">Log In or Register</a>.</p>
                 </div>
-            ` : appState.modalContent.message ? `
-                <div class="p-3 mb-4 text-sm ${appState.modalContent.type === 'import_success' ? 'text-green-700 bg-green-100' : 'text-red-700 bg-red-100'} rounded-lg">
-                    ${appState.modalContent.message}
-                </div>
-            ` : `
-                <p class="text-sm text-gray-600 mb-4">
-                    Upload a CSV file containing your OT assets. Required columns are
-                    <code class="font-mono bg-gray-100 p-1 rounded">name</code> and
-                    <code class="font-mono bg-gray-100 p-1 rounded">ip_address</code>.
-                </p>
-                <div class="p-3 mb-4 bg-yellow-50 rounded-lg border border-yellow-200">
-                    <p class="text-xs font-semibold text-yellow-800">Example CSV Format (Headers must be present):</p>
-                    <code class="block mt-1 font-mono text-xs whitespace-pre bg-yellow-100 p-2 rounded">
-name,category,ip_address,firmware_version,criticality,location,notes
-PLC-01,PLC,10.0.1.5,V3.1,High,Assembly Line 1,Production Control
-HMI-22,HMI,10.0.2.8,Win10 IoT,Medium,Control Room A,Operator Interface
-                    </code>
-                </div>
-            `}
-           
-            <form onsubmit="handleCSVUpload(event)">
-                <div class="mb-6">
-                    <label for="csv_file" class="block text-sm font-medium text-gray-700">Select CSV File</label>
-                    <input type="file" id="csv_file" name="csv_file" accept=".csv" required
-                        class="mt-1 block w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-lg file:border-0 file:text-sm file:font-semibold file:bg-indigo-50 file:text-indigo-700 hover:file:bg-indigo-100"
-                        ${appState.modalContent.loading ? 'disabled' : ''}
-                    >
-                </div>
-               
-                <div class="flex justify-end space-x-3">
-                    <button type="button" onclick="closeModal()" class="px-4 py-2 text-gray-700 bg-gray-200 rounded-lg hover:bg-gray-300 transition"
-                        ${appState.modalContent.loading ? 'disabled' : ''}>
-                        Close
-                    </button>
-                    <button type="submit"
-                        class="px-4 py-2 text-white bg-emerald-600 rounded-lg shadow-md hover:bg-emerald-700 transition"
-                        ${appState.modalContent.loading || appState.modalContent.type === 'import_success' ? 'disabled' : ''}
-                    >
-                        ${appState.modalContent.loading ? 'Uploading...' : 'Import Assets'}
-                    </button>
-                </div>
-            </form>
-        `;
+            ` : '';
 
+            // Simple Task Summary Table
+            const top5Tasks = appState.data.tasks.slice(0, 5);
 
-        // --- MODAL RENDERING ---
-
-        const renderModal = () => {
-            if (!appState.isModalOpen) return '';
-
-            let modalBody = '';
-            let modalTitle = 'Modal';
-            let icon = 'ClipboardList';
-
-            switch (appState.modalContent.type) {
-                case 'sign_in':
-                    modalTitle = 'User Sign In';
-                    icon = 'LogIn';
-                    modalBody = renderSignInForm();
-                    break;
-                case 'confirm_delete_asset':
-                    modalTitle = `Confirm Asset Removal`;
-                    icon = 'Trash2';
-                    const a = appState.modalContent.data;
-                    modalBody = `
-                        <p class="text-lg text-gray-700">Are you sure you want to permanently remove the asset record for <strong>${a.name}</strong>?</p>
-                        <p class="mt-2 text-sm text-red-600">This action will delete all associated vulnerability data.</p>
-                        <div class="flex justify-end space-x-3 mt-6">
-                            <button onclick="closeModal()" class="px-4 py-2 text-gray-700 bg-gray-200 rounded-lg hover:bg-gray-300 transition">Cancel</button>
-                            <button onclick="deleteAsset('${a.id}')" class="px-4 py-2 text-white bg-red-600 rounded-lg hover:bg-red-700 transition">Remove Asset</button>
-                        </div>
-                    `;
-                    break;
-                case 'add_vulnerability':
-                    modalTitle = `Add Vulnerability`;
-                    icon = 'Bug';
-                    modalBody = renderAddVulnerabilityForm();
-                    break;
-                case 'import_csv':
-                case 'import_success':
-                    modalTitle = `Import Assets`;
-                    icon = 'FileUp';
-                    modalBody = renderImportCSVForm();
-                    break;
-                default:
-                    modalBody = `<p>Invalid modal content.</p>`;
-            }
+            const taskRows = top5Tasks.map(task => {
+                const severityColor = task.severity === 'High' ? 'bg-red-500' : task.severity === 'Medium' ? 'bg-yellow-500' : 'bg-green-500';
+                return `
+                    <tr class="hover:bg-gray-50 cursor-pointer" onclick="navigate('TaskOverview')">
+                        <td class="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">${task.title}</td>
+                        <td class="px-6 py-4 whitespace-nowrap">
+                            <span class="px-2 inline-flex text-xs leading-5 font-semibold rounded-full ${severityColor} text-white">
+                                ${task.severity}
+                            </span>
+                        </td>
+                        <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">${new Date(task.dueDate).toLocaleDateString()}</td>
+                        <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">${appState.data.sites.find(s => s.id === task.siteId)?.name || 'N/A'}</td>
+                    </tr>
+                `;
+            }).join('');
 
             return `
-                <div class="fixed inset-0 z-50 overflow-y-auto" aria-labelledby="modal-title" role="dialog" aria-modal="true">
-                    <div class="flex items-end justify-center min-h-screen pt-4 px-4 pb-20 text-center sm:block sm:p-0">
-                        <!-- Background overlay -->
-                        <div class="fixed inset-0 bg-gray-500 bg-opacity-75 transition-opacity" onclick="closeModal()"></div>
-                       
-                        <!-- Modal panel -->
-                        <div class="inline-block align-bottom bg-white rounded-xl text-left overflow-hidden shadow-xl transform transition-all sm:my-8 sm:align-middle sm:max-w-lg sm:w-full">
-                            <div class="bg-white px-4 pt-5 pb-4 sm:p-6 sm:pb-4">
-                                <div class="flex items-start">
-                                    <div class="mx-auto flex-shrink-0 flex items-center justify-center h-12 w-12 rounded-full ${appState.modalContent.type === 'import_success' ? 'bg-green-100' : 'bg-indigo-100'} sm:mx-0 sm:h-10 sm:w-10">
-                                        ${lucide.createIcons()[icon].toSvg({ class: `w-6 h-6 ${appState.modalContent.type === 'import_success' ? 'text-green-600' : 'text-indigo-600'}` })}
-                                    </div>
-                                    <div class="mt-3 text-center sm:mt-0 sm:ml-4 sm:text-left w-full">
-                                        <h3 class="text-lg leading-6 font-medium text-gray-900" id="modal-title">
-                                            ${modalTitle}
-                                        </h3>
-                                        <div class="mt-4">
-                                            ${modalBody}
-                                        </div>
-                                    </div>
-                                </div>
+                <div class="space-y-6">
+                    ${anonWarning}
+                    <h1 class="text-3xl font-bold text-gray-900">Security Posture Dashboard</h1>
+
+                    <!-- Key Metrics Cards -->
+                    <div class="grid grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-3">
+                        <div class="bg-white p-6 rounded-xl shadow-lg border-l-4 border-indigo-500">
+                            <div class="flex items-center justify-between">
+                                <p class="text-sm font-medium text-gray-500">Open Tasks</p>
+                                <i data-lucide="list-checks" class="w-6 h-6 text-indigo-500"></i>
                             </div>
+                            <p class="text-3xl font-bold text-gray-900 mt-1">${openTasks}</p>
+                            <p class="text-sm text-gray-400 mt-2">Currently being remediated</p>
+                        </div>
+
+                        <div class="bg-white p-6 rounded-xl shadow-lg border-l-4 border-red-500">
+                            <div class="flex items-center justify-between">
+                                <p class="text-sm font-medium text-gray-500">High Severity</p>
+                                <i data-lucide="alert-triangle" class="w-6 h-6 text-red-500"></i>
+                            </div>
+                            <p class="text-3xl font-bold text-gray-900 mt-1">${highSeverityTasks}</p>
+                            <p class="text-sm text-gray-400 mt-2">Requiring immediate attention</p>
+                        </div>
+
+                        <div class="bg-white p-6 rounded-xl shadow-lg border-l-4 border-green-500">
+                            <div class="flex items-center justify-between">
+                                <p class="text-sm font-medium text-gray-500">Total Sites/Assets</p>
+                                <i data-lucide="factory" class="w-6 h-6 text-green-500"></i>
+                            </div>
+                            <p class="text-3xl font-bold text-gray-900 mt-1">${totalSites}</p>
+                            <p class="text-sm text-gray-400 mt-2">Across all locations</p>
+                        </div>
+                    </div>
+
+                    <!-- Recent Tasks Table -->
+                    <div class="bg-white rounded-xl shadow-lg overflow-hidden">
+                        <div class="p-6">
+                            <h2 class="text-xl font-semibold text-gray-900 flex justify-between items-center">
+                                Top Priority Tasks
+                                <button onclick="navigate('TaskOverview')" class="text-sm text-indigo-600 hover:text-indigo-700 font-medium flex items-center">
+                                    View All
+                                    <i data-lucide="arrow-right" class="w-4 h-4 ml-1"></i>
+                                </button>
+                            </h2>
+                        </div>
+                        <div class="overflow-x-auto">
+                            <table class="min-w-full divide-y divide-gray-200">
+                                <thead class="bg-gray-50">
+                                    <tr>
+                                        <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Title</th>
+                                        <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Severity</th>
+                                        <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Due Date</th>
+                                        <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Site</th>
+                                    </tr>
+                                </thead>
+                                <tbody class="bg-white divide-y divide-gray-200">
+                                    ${taskRows.length > 0 ? taskRows : `<tr><td colspan="4" class="px-6 py-4 text-center text-gray-500">No open tasks found.</td></tr>`}
+                                </tbody>
+                            </table>
                         </div>
                     </div>
                 </div>
             `;
         };
 
-        // --- MAIN RENDER FUNCTION ---
-
         /**
-         * Renders the entire application UI to the DOM.
+         * Task Overview View.
          */
-        const render = () => {
-            let app = document.getElementById('app');
-            if (!app) {
-                app = document.createElement('div');
-                app.id = 'app';
-                app.className = 'min-h-screen bg-gray-100 font-sans';
-                document.body.appendChild(app);
-            }
+        VIEWS.TaskOverviewView = () => {
+            const tasks = appState.data.tasks;
+            
+            const taskCards = tasks.map(task => {
+                const severityClass = task.severity === 'High' ? 'border-red-500 bg-red-50' : 
+                                      task.severity === 'Medium' ? 'border-yellow-500 bg-yellow-50' : 
+                                      'border-green-500 bg-green-50';
+                const statusColor = task.status === 'Open' ? 'text-red-600' : 
+                                    task.status === 'In Progress' ? 'text-yellow-600' : 
+                                    'text-green-600';
+                const assignedUser = appState.data.users.find(u => u.userId === task.assignedTo);
+                const site = appState.data.sites.find(s => s.id === task.siteId);
 
-            app.innerHTML = `
-                ${renderNav()}
-                ${renderContent()}
-                ${renderModal()}
+                return `
+                    <div class="bg-white p-5 rounded-xl shadow-md border-t-4 ${severityClass} hover:shadow-lg transition duration-200">
+                        <div class="flex justify-between items-start">
+                            <h3 class="text-lg font-semibold text-gray-900">${task.title}</h3>
+                            <span class="text-xs font-medium ${statusColor}">${task.status}</span>
+                        </div>
+                        <p class="text-sm text-gray-500 mt-1">${task.description.substring(0, 100)}${task.description.length > 100 ? '...' : ''}</p>
+                        
+                        <div class="mt-4 text-xs space-y-1">
+                            <p class="flex items-center text-gray-700">
+                                <i data-lucide="calendar" class="w-4 h-4 mr-2 text-indigo-500"></i>
+                                Due: ${new Date(task.dueDate).toLocaleDateString()}
+                            </p>
+                            <p class="flex items-center text-gray-700">
+                                <i data-lucide="factory" class="w-4 h-4 mr-2 text-indigo-500"></i>
+                                Site: ${site ? site.name : 'N/A'}
+                            </p>
+                            <p class="flex items-center text-gray-700">
+                                <i data-lucide="user-check" class="w-4 h-4 mr-2 text-indigo-500"></i>
+                                Assigned: ${assignedUser ? assignedUser.email || 'Anonymous' : 'Unassigned'}
+                            </p>
+                        </div>
+                        <div class="mt-4 flex space-x-3">
+                            <button onclick="showTaskModal('${task.id}')" class="flex items-center text-sm font-medium text-indigo-600 hover:text-indigo-700">
+                                <i data-lucide="edit-3" class="w-4 h-4 mr-1"></i> Edit
+                            </button>
+                            <button onclick="confirmDeleteTask('${task.id}')" class="flex items-center text-sm font-medium text-red-600 hover:text-red-700">
+                                <i data-lucide="trash-2" class="w-4 h-4 mr-1"></i> Delete
+                            </button>
+                        </div>
+                    </div>
+                `;
+            }).join('');
+
+            return `
+                <div class="space-y-6">
+                    <div class="flex justify-between items-center">
+                        <h1 class="text-3xl font-bold text-gray-900">Task Overview (${tasks.length} Total)</h1>
+                        <button onclick="showTaskModal(null)" class="flex items-center px-4 py-2 bg-indigo-600 text-white rounded-lg shadow-md hover:bg-indigo-700 transition duration-150">
+                            <i data-lucide="plus" class="w-5 h-5 mr-2"></i> New Task
+                        </button>
+                    </div>
+
+                    <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 custom-scrollbar">
+                        ${taskCards.length > 0 ? taskCards : '<div class="col-span-full p-10 text-center text-gray-500 bg-white rounded-xl shadow-md">No tasks have been created yet.</div>'}
+                    </div>
+                </div>
             `;
+        };
+        
+        /**
+         * Task Creation/Edit Form View for Modal.
+         */
+        VIEWS.TaskFormView = () => {
+            const form = appState.taskForm;
+            const isEdit = !!form.id;
 
-            // Re-render lucide icons after injecting HTML
-            if (window.lucide && window.lucide.createIcons) {
-                window.lucide.createIcons();
-            }
+            // Options for select inputs
+            const severityOptions = ['Low', 'Medium', 'High'];
+            const statusOptions = ['Open', 'In Progress', 'Completed', 'On Hold'];
+            const siteOptions = appState.data.sites;
+            const assignedUserOptions = appState.data.users.map(u => ({ id: u.userId, label: u.email || `Anonymous: ${u.userId.substring(0, 8)}...` }));
+            
+            return `
+                <form id="modal-form" data-form-type="task" onsubmit="handleTaskCreation(event)" class="space-y-4">
+                    <p id="task-form-error" class="text-sm text-red-500 font-medium"></p>
+                    
+                    <div>
+                        <label for="title" class="block text-sm font-medium text-gray-700">Title <span class="text-red-500">*</span></label>
+                        <input type="text" id="title" name="title" value="${form.title}" required class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:ring-indigo-500 focus:border-indigo-500">
+                    </div>
+
+                    <div>
+                        <label for="siteId" class="block text-sm font-medium text-gray-700">Affected Site/Asset <span class="text-red-500">*</span></label>
+                        <select id="siteId" name="siteId" required class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:ring-indigo-500 focus:border-indigo-500">
+                            <option value="">-- Select Site/Asset --</option>
+                            ${siteOptions.map(site => 
+                                `<option value="${site.id}" ${form.siteId === site.id ? 'selected' : ''}>${site.name} (${site.type})</option>`
+                            ).join('')}
+                        </select>
+                    </div>
+
+                    <div>
+                        <label for="description" class="block text-sm font-medium text-gray-700">Description <span class="text-red-500">*</span></label>
+                        <textarea id="description" name="description" rows="3" required class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:ring-indigo-500 focus:border-indigo-500">${form.description}</textarea>
+                    </div>
+
+                    <div class="grid grid-cols-2 gap-4">
+                        <div>
+                            <label for="severity" class="block text-sm font-medium text-gray-700">Severity <span class="text-red-500">*</span></label>
+                            <select id="severity" name="severity" required class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:ring-indigo-500 focus:border-indigo-500">
+                                ${severityOptions.map(opt => 
+                                    `<option value="${opt}" ${form.severity === opt ? 'selected' : ''}>${opt}</option>`
+                                ).join('')}
+                            </select>
+                        </div>
+                        <div>
+                            <label for="status" class="block text-sm font-medium text-gray-700">Status <span class="text-red-500">*</span></label>
+                            <select id="status" name="status" required class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:ring-indigo-500 focus:border-indigo-500">
+                                ${statusOptions.map(opt => 
+                                    `<option value="${opt}" ${form.status === opt ? 'selected' : ''}>${opt}</option>`
+                                ).join('')}
+                            </select>
+                        </div>
+                    </div>
+
+                    <div class="grid grid-cols-2 gap-4">
+                        <div>
+                            <label for="dueDate" class="block text-sm font-medium text-gray-700">Due Date <span class="text-red-500">*</span></label>
+                            <input type="date" id="dueDate" name="dueDate" value="${form.dueDate}" required class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:ring-indigo-500 focus:border-indigo-500">
+                        </div>
+                        <div>
+                            <label for="assignedTo" class="block text-sm font-medium text-gray-700">Assigned To <span class="text-red-500">*</span></label>
+                            <select id="assignedTo" name="assignedTo" required class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:ring-indigo-500 focus:border-indigo-500">
+                                <option value="">-- Select User --</option>
+                                ${assignedUserOptions.map(user => 
+                                    `<option value="${user.id}" ${form.assignedTo === user.id ? 'selected' : ''}>${user.label}</option>`
+                                ).join('')}
+                            </select>
+                        </div>
+                    </div>
+                </form>
+            `;
         };
 
-        // --- INITIALIZATION ---
+        /**
+         * Site Management View (Stub for future implementation).
+         */
+        VIEWS.SiteManagementView = () => {
+             const siteRows = appState.data.sites.map(site => `
+                <tr class="hover:bg-gray-50">
+                    <td class="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">${site.name}</td>
+                    <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">${site.type}</td>
+                    <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">${site.location}</td>
+                    <td class="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
+                        <button class="text-indigo-600 hover:text-indigo-900">Edit</button>
+                    </td>
+                </tr>
+            `).join('');
 
-        // Expose necessary functions globally for HTML event handlers
-        window.handleNavigate = handleNavigate;
+            return `
+                <div class="space-y-6">
+                    <div class="flex justify-between items-center">
+                        <h1 class="text-3xl font-bold text-gray-900">Sites & Asset Management (${appState.data.sites.length} Total)</h1>
+                        <button class="flex items-center px-4 py-2 bg-indigo-600 text-white rounded-lg shadow-md hover:bg-indigo-700 transition duration-150">
+                            <i data-lucide="plus" class="w-5 h-5 mr-2"></i> New Site
+                        </button>
+                    </div>
+
+                    <div class="bg-white rounded-xl shadow-lg overflow-x-auto">
+                        <table class="min-w-full divide-y divide-gray-200">
+                            <thead class="bg-gray-50">
+                                <tr>
+                                    <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Name</th>
+                                    <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Type</th>
+                                    <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Location</th>
+                                    <th scope="col" class="relative px-6 py-3"><span class="sr-only">Edit</span></th>
+                                </tr>
+                            </thead>
+                            <tbody class="bg-white divide-y divide-gray-200">
+                                ${siteRows.length > 0 ? siteRows : `<tr><td colspan="4" class="px-6 py-4 text-center text-gray-500">No sites/assets defined.</td></tr>`}
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            `;
+        };
+
+        /**
+         * User Management View (Stub for future implementation).
+         */
+        VIEWS.UserManagementView = () => {
+            const userRows = appState.data.users.map(user => `
+                <tr class="hover:bg-gray-50">
+                    <td class="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">${user.email || user.userId}</td>
+                    <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">${user.role || 'Analyst'}</td>
+                    <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">${user.userId}</td>
+                    <td class="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
+                        <button class="text-indigo-600 hover:text-indigo-900">Edit Role</button>
+                    </td>
+                </tr>
+            `).join('');
+
+            return `
+                <div class="space-y-6">
+                    <h1 class="text-3xl font-bold text-gray-900">User & Role Management (${appState.data.users.length} Total)</h1>
+                    
+                    <div class="bg-white rounded-xl shadow-lg overflow-x-auto">
+                        <table class="min-w-full divide-y divide-gray-200">
+                            <thead class="bg-gray-50">
+                                <tr>
+                                    <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">User ID / Email</th>
+                                    <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Role</th>
+                                    <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Full User ID</th>
+                                    <th scope="col" class="relative px-6 py-3"><span class="sr-only">Actions</span></th>
+                                </tr>
+                            </thead>
+                            <tbody class="bg-white divide-y divide-gray-200">
+                                ${userRows.length > 0 ? userRows : `<tr><td colspan="4" class="px-6 py-4 text-center text-gray-500">No user profiles found.</td></tr>`}
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            `;
+        };
+
+
+        // --- Expose global functions for inline handlers ---
+        window.navigate = navigate;
+        window.toggleSidebar = toggleSidebar;
         window.openModal = openModal;
         window.closeModal = closeModal;
-        window.handleAssetFormChange = handleAssetFormChange;
-        window.handleAssetFormSubmit = handleAssetFormSubmit;
-        window.deleteAsset = deleteAsset;
-        window.createEmptyAssetForm = createEmptyAssetForm;
-        window.handleAddVulnerability = handleAddVulnerability;
-        window.handleSignInSubmit = handleSignInSubmit;
-        window.handleCSVUpload = handleCSVUpload; // New CSV handler
-        window.appState = appState;
-        window.signOut = signOut;
+        window.handleModalConfirm = handleModalConfirm;
+        window.handleSignOut = handleSignOut;
+        window.handleAuthFormSubmit = handleAuthFormSubmit;
+        window.showTaskModal = showTaskModal;
+        window.handleTaskCreation = handleTaskCreation;
+        window.confirmDeleteTask = confirmDeleteTask;
+        window.VIEWS = VIEWS; // Ensure VIEWS is also available globally
 
-        // **CRITICAL FIX:** Ensure DOM is loaded before initializing Firebase
+
+        // --- Initialization ---
         window.onload = function () {
-            initFirebase();
-            render();
+            // Append modal container to the body once
+            const modalContainer = document.createElement('div');
+            modalContainer.id = 'modal-container';
+            document.body.appendChild(modalContainer);
+            
+            try {
+                // Initialize using the configuration
+                const app = initializeApp(MANUAL_FIREBASE_CONFIG);
+                db = getFirestore(app);
+                auth = getAuth(app);
+                setLogLevel('debug');
+                appState.isFirebaseReady = true;
+                appState.appId = MANUAL_FIREBASE_CONFIG.projectId;
+                
+                // Set up auth listener (this updates appState.isAuthReady and calls render/data listeners)
+                onAuthStateChanged(auth, updateAuthState);
+
+                // Start the sign-in process
+                attemptCustomTokenSignIn();
+
+            } catch (e) {
+                console.error("Fatal Firebase Initialization Error:", e);
+                appState.error = "Fatal Firebase Error: Check console for configuration details or missing imports.";
+                appState.isAuthReady = true;
+                appState.isFirebaseReady = false;
+                render();
+            }
         };
 
     </script>
 </head>
-<body class="min-h-screen bg-gray-100">
+<body class="bg-gray-100 min-h-screen font-sans">
     <div id="app">
         <!-- Content generated by render() -->
     </div>

@@ -12,25 +12,6 @@
     <!-- Load Babel to process JSX -->
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
     
-    <!-- Load Firebase SDKs -->
-    <script type="module">
-        // Expose all necessary Firebase functions globally BEFORE the React script runs
-        import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
-        import { getAuth, signInWithEmailAndPassword, createUserWithEmailAndPassword, onAuthStateChanged, signOut } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
-        import { getFirestore, doc, setDoc, collection, query, onSnapshot, serverTimestamp, setLogLevel, addDoc, getDoc, updateDoc, deleteDoc, where, orderBy } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
-        
-        window.FirebaseServices = {
-            initializeApp, getAuth, signInWithEmailAndPassword, createUserWithEmailAndPassword, onAuthStateChanged, signOut,
-            getFirestore, doc, setDoc, collection, query, onSnapshot, serverTimestamp, setLogLevel,
-            addDoc, getDoc, updateDoc, deleteDoc, where, orderBy
-        };
-        
-        // Log level for debugging Firestore operations
-        if (typeof setLogLevel === 'function') {
-            setLogLevel('Debug');
-        }
-    </script>
-
     <style>
         @media print {
             .print-hide { display: none !important; }
@@ -41,16 +22,64 @@
         .custom-scrollbar::-webkit-scrollbar { width: 8px; height: 8px; }
         .custom-scrollbar::-webkit-scrollbar-thumb { background-color: #A5B4FC; border-radius: 4px; }
         .custom-scrollbar::-webkit-scrollbar-track { background-color: #E0E7FF; }
+        @keyframes spin {
+            from { transform: rotate(0deg); }
+            to { transform: rotate(360deg); }
+        }
+        .animate-spin-slow {
+            animation: spin 3s linear infinite;
+        }
     </style>
 </head>
 <body class="bg-gray-100 min-h-screen font-sans">
     <div id="root"></div>
 
-    <!-- The entire React application is defined here -->
+    <!-- 
+        CRUCIAL FIX: Replacing dynamic 'await import()' with static module imports.
+        This loads Firebase immediately and exposes the required functions to the global 'window.firebase' 
+        object, which is more robust against network restrictions than dynamic module loading. 
+    -->
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import * as firebaseAuth from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import * as firebaseFirestore from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+
+        // Expose all necessary functions to the global scope for the React/Babel script to use
+        window.firebase = {
+            // App
+            initializeApp: initializeApp,
+
+            // Auth
+            getAuth: firebaseAuth.getAuth,
+            onAuthStateChanged: firebaseAuth.onAuthStateChanged,
+            signInWithEmailAndPassword: firebaseAuth.signInWithEmailAndPassword,
+            createUserWithEmailAndPassword: firebaseAuth.createUserWithEmailAndPassword,
+            signOut: firebaseAuth.signOut,
+
+            // Firestore
+            getFirestore: firebaseFirestore.getFirestore,
+            doc: firebaseFirestore.doc,
+            setDoc: firebaseFirestore.setDoc,
+            collection: firebaseFirestore.collection,
+            query: firebaseFirestore.query,
+            onSnapshot: firebaseFirestore.onSnapshot,
+            serverTimestamp: firebaseFirestore.serverTimestamp,
+            setLogLevel: firebaseFirestore.setLogLevel,
+            addDoc: firebaseFirestore.addDoc,
+            getDoc: firebaseFirestore.getDoc,
+            updateDoc: firebaseFirestore.updateDoc,
+            deleteDoc: firebaseFirestore.deleteDoc,
+            where: firebaseFirestore.where,
+            orderBy: firebaseFirestore.orderBy,
+        };
+        console.log("Firebase module functions loaded and exposed to window.firebase");
+    </script>
+    
+    <!-- The entire React application -->
     <script type="text/babel">
         const { useState, useEffect, useMemo } = React;
 
-        // --- INLINE SVG ICONS (Ensures stability and avoids React import/export issues) ---
+        // --- INLINE SVG ICONS ---
         const Shield = (props) => (<svg {...props} xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path></svg>);
         const LogOut = (props) => (<svg {...props} xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"></path><polyline points="16 17 21 12 16 7"></polyline><line x1="21" y1="12" x2="9" y2="12"></line></svg>);
         const Loader = (props) => (<svg {...props} xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 12a9 9 0 1 1-6.219-8.56"></path></svg>);
@@ -68,55 +97,8 @@
         const User = (props) => (<svg {...props} xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2"></path><circle cx="12" cy="7" r="4"></circle></svg>);
         // --- END OF INLINE SVG ICONS ---
 
-
-        // --- CONFIGURATION & FIREBASE INITIALIZATION ---
-        let firebaseApp, db, auth;
-        let isFirebaseInitialized = false;
-        let configError = null;
-
-        const initFirebase = () => {
-            if (isFirebaseInitialized || !window.FirebaseServices) return;
-
-            const F = window.FirebaseServices;
-
-            // 1. Safely load and parse configuration
-            let firebaseConfig = {};
-            const rawConfig = typeof __firebase_config !== 'undefined' ? __firebase_config : '{}';
-
-            try {
-                firebaseConfig = JSON.parse(rawConfig);
-                if (!firebaseConfig || !firebaseConfig.apiKey) {
-                    throw new Error("Missing apiKey or invalid config structure.");
-                }
-            } catch (e) {
-                console.error("Firebase Config Parsing Error:", e);
-                configError = `Configuration provided is invalid or missing required fields. Raw config: ${rawConfig.substring(0, 50)}...`;
-                return;
-            }
-
-            // 2. Initialize
-            try {
-                firebaseApp = F.initializeApp(firebaseConfig);
-                db = F.getFirestore(firebaseApp);
-                auth = F.getAuth(firebaseApp);
-                isFirebaseInitialized = true;
-                console.log("Firebase services initialized successfully.");
-            } catch(e) {
-                console.error("Failed to initialize Firebase app services:", e);
-                configError = `Failed to initialize Firebase services: ${e.message}`;
-            }
-        };
-
-        initFirebase();
-        
-        // --- UTILITY FUNCTIONS ---
-
-        // Firestore Path Helpers
-        const getPublicCollectionRef = (collectionName) => {
-            const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
-            // Use the initialized db instance
-            return db ? FirebaseServices.collection(db, `artifacts/${appId}/public/data/${collectionName}`) : null;
-        };
+        // Helper function to check if Firebase is globally loaded
+        const isFirebaseLoaded = () => typeof window.firebase !== 'undefined' && typeof window.firebase.initializeApp === 'function';
 
         // --- COMMON UI COMPONENTS ---
 
@@ -178,72 +160,84 @@
 
         // --- AUTHENTICATION GATE COMPONENT ---
 
-        const AuthGate = () => {
+        const AuthGate = ({ initError }) => {
             const [isRegistering, setIsRegistering] = useState(false);
             const [email, setEmail] = useState('');
             const [password, setPassword] = useState('');
-            const [error, setError] = useState(configError); // Initialize error with config error if present
+            const [authError, setAuthError] = useState(null); 
             const [isLoading, setIsLoading] = useState(false);
-
-            // Re-check config error on component load
-            useEffect(() => {
-                if (configError) {
-                    setError(configError);
-                } else if (!isFirebaseInitialized || !auth) {
-                    setError("Firebase services failed to initialize (unknown reason). Check console for details.");
-                }
-            }, []);
-
-            if (error && error !== configError) {
-                 // Show the primary configuration error if it exists and is not overwritten by a login attempt error
+            
+            // Display the detailed initialization error if it exists
+            if (initError) {
                 return (
                     <div className="min-h-screen flex items-center justify-center bg-gray-100 p-4">
-                        <Card className="w-full max-w-md p-8 text-center border-red-500 border-2">
+                        <Card className="w-full max-w-xl p-8 text-center border-red-500 border-2">
                             <AlertTriangle className="w-8 h-8 mx-auto text-red-500 mb-4" />
-                            <h2 className="text-xl font-bold text-red-700 mb-2">Configuration Error</h2>
-                            <p className="text-gray-600 whitespace-pre-wrap text-sm">
-                                {error}
+                            <h2 className="text-xl font-bold text-red-700 mb-2">FIREBASE CONFIGURATION ERROR</h2>
+                            <p className="text-gray-600 whitespace-pre-wrap text-sm text-left font-mono bg-red-50 p-3 rounded-lg overflow-x-auto">
+                                **Details:** {initError}
                             </p>
-                            <p className="mt-3 text-xs text-gray-500">
-                                Please ensure the `__firebase_config` global variable is a valid JSON object with an `apiKey` and other necessary fields.
+                            <p className="mt-4 text-sm text-gray-700 text-left">
+                                **Crucial Fix:** Please verify the environment variable in Vercel is named exactly: **<code className="font-bold text-black">__firebase_config</code>** (all lowercase with double underscores).
+                                If the name is correct, the issue is likely due to **network restrictions** preventing the loading of the Firebase CDN links.
                             </p>
                         </Card>
                     </div>
                 );
             }
             
-            if (!isFirebaseInitialized || !auth) {
-                // If config error is null, but we still didn't init, show a generic message
-                 return (
+            // If Firebase modules were not loaded statically (shouldn't happen with the new fix)
+            if (!isFirebaseLoaded()) {
+                return (
                     <div className="min-h-screen flex items-center justify-center bg-gray-100 p-4">
-                        <Card className="w-full max-w-md p-8 text-center border-red-500 border-2">
+                        <Card className="w-full max-w-xl p-8 text-center border-red-500 border-2">
                             <AlertTriangle className="w-8 h-8 mx-auto text-red-500 mb-4" />
-                            <h2 className="text-xl font-bold text-red-700 mb-2">System Error</h2>
-                            <p className="text-gray-600">
-                                Firebase services could not be fully initialized. Check the console for detailed debug logs.
+                            <h2 className="text-xl font-bold text-red-700 mb-2">SDK MODULE LOAD FAILURE</h2>
+                            <p className="text-gray-600 text-sm mt-2">
+                                The Firebase module scripts failed to load statically. This strongly indicates a severe network/CSP restriction blocking 
+                                access to <code className="font-mono text-black">https://www.gstatic.com</code>.
+                            </p>
+                            <p className="mt-4 text-sm text-gray-700 text-left">
+                                Please ensure all external CDN resources are allowed.
                             </p>
                         </Card>
                     </div>
                 );
             }
 
+            // If we made it past initialization, proceed with the login form
             const handleAuth = async (e) => {
                 e.preventDefault();
-                setError(null); // Clear previous errors
+                setAuthError(null); 
                 setIsLoading(true);
+                const { getAuth, signInWithEmailAndPassword, createUserWithEmailAndPassword } = window.firebase;
 
                 try {
+                    const auth = getAuth();
                     if (isRegistering) {
-                        await FirebaseServices.createUserWithEmailAndPassword(auth, email, password);
+                        await createUserWithEmailAndPassword(auth, email, password);
                         console.log("User registered and signed in.");
                     } else {
-                        // This handles your existing login attempt (cybermelb@gmail.com)
-                        await FirebaseServices.signInWithEmailAndPassword(auth, email, password);
+                        await signInWithEmailAndPassword(auth, email, password);
                         console.log("User signed in.");
                     }
                 } catch (err) {
-                    const msg = err.code ? err.code.replace('auth/', '').replace(/-/g, ' ') : 'An unknown error occurred.';
-                    setError(msg.charAt(0).toUpperCase() + msg.slice(1));
+                    let msg = 'An unknown error occurred.';
+                    if (err.code) {
+                        if (err.code === 'auth/operation-not-allowed') {
+                            // Specific fix for the user's reported error
+                            msg = `Operation Not Allowed (Code: auth/operation-not-allowed). 
+                                PLEASE GO TO YOUR FIREBASE CONSOLE -> AUTHENTICATION -> SIGN-IN METHOD, and ensure the Email/Password provider is ENABLED.`;
+                        } else {
+                            // Clean up standard Firebase error codes
+                            msg = err.code.replace('auth/', '').replace(/-/g, ' ');
+                            msg = msg.charAt(0).toUpperCase() + msg.slice(1);
+                        }
+                    } else if (err.message) {
+                        msg = err.message;
+                    }
+                    setAuthError(msg);
+                    console.error("Auth Error:", err);
                 } finally {
                     setIsLoading(false);
                 }
@@ -256,9 +250,10 @@
                             <Shield className="w-8 h-8 mr-2" /> OT Guardian Login
                         </h2>
                         
-                        {error && (
+                        {authError && (
                             <div className="mb-4 p-3 bg-red-100 border border-red-400 text-red-700 rounded-lg text-sm flex items-center">
-                                <AlertTriangle className="w-4 h-4 mr-2" /> Error: {error}
+                                <AlertTriangle className="w-4 h-4 mr-2 flex-shrink-0" /> 
+                                <span className="break-words whitespace-pre-wrap">{authError}</span>
                             </div>
                         )}
 
@@ -301,7 +296,7 @@
                                 <>
                                     Already have an account?{' '}
                                     <button
-                                        onClick={() => { setIsRegistering(false); setError(configError); }}
+                                        onClick={() => { setIsRegistering(false); setAuthError(null); }}
                                         className="font-semibold text-indigo-600 hover:text-indigo-800"
                                     >
                                         Sign In
@@ -311,7 +306,7 @@
                                 <>
                                     Don't have an account?{' '}
                                     <button
-                                        onClick={() => { setIsRegistering(true); setError(configError); }}
+                                        onClick={() => { setIsRegistering(true); setAuthError(null); }}
                                         className="font-semibold text-indigo-600 hover:text-indigo-800"
                                     >
                                         Register
@@ -324,18 +319,6 @@
             );
         };
 
-
-        // --- DATA STRUCTURES (MOCK/DEFAULT) ---
-        const defaultAsset = {
-            id: 'new',
-            name: 'New PLC Asset',
-            type: 'PLC',
-            location: 'Site A/Area 1',
-            criticality: 'High',
-            owner: 'Engineering Team',
-            vendor: 'Siemens',
-            model: 'S7-1500',
-        };
 
         // --- VIEW COMPONENTS (Simplified for brevity, similar to previous version) ---
         
@@ -434,37 +417,91 @@
             const [risks, setRisks] = useState([]);
             const [assets, setAssets] = useState([]);
             const [deploymentStatus, setDeploymentStatus] = useState(null);
+            
+            // Firebase State
+            const [fbApp, setFbApp] = useState(null); // Holds the initialized Firebase App instance
+            const [initError, setInitError] = useState(null); // Holds initialization errors
+            const fb = window.firebase; // Global access to Firebase functions
 
-            // 1. Authentication Listener Effect
+            // 1. Firebase Initialization Effect
             useEffect(() => {
-                // If Firebase services could not initialize (due to config error), stop loading
-                if (!isFirebaseInitialized || !auth) {
-                    setIsAuthLoading(false); 
+                if (!isFirebaseLoaded()) {
+                    // This case should be caught by the AuthGate component if the static load fails
+                    setInitError("SDK Module Load Failure: window.firebase object not found after static script execution.");
+                    setIsAuthLoading(false);
                     return;
                 }
-                
-                // Set up listener for auth state changes (sign in/out)
-                const unsubscribe = FirebaseServices.onAuthStateChanged(auth, (user) => {
-                    setAuthUser(user);
-                    setIsAuthLoading(false);
-                });
 
-                return () => unsubscribe();
-            }, []);
+                const setupFirebase = () => {
+                    try {
+                        // 2. Safely load and parse configuration
+                        let firebaseConfig = {};
+                        const rawConfig = typeof __firebase_config !== 'undefined' ? __firebase_config : '{}';
+
+                        try {
+                            firebaseConfig = JSON.parse(rawConfig);
+                            if (!firebaseConfig || !firebaseConfig.apiKey) {
+                                throw new Error("Missing apiKey or invalid config structure. Check Vercel environment variables.");
+                            }
+                        } catch (e) {
+                            const errorMsg = `Config Parsing Failed: ${e.message}. Raw config (first 100 chars): ${rawConfig.substring(0, 100)}...`;
+                            console.error("Config Error:", errorMsg);
+                            setInitError(errorMsg);
+                            setIsAuthLoading(false);
+                            return;
+                        }
+
+                        // 3. Initialize App and Services using globally available functions
+                        const app = fb.initializeApp(firebaseConfig);
+                        const auth = fb.getAuth(app);
+                        const db = fb.getFirestore(app);
+                        fb.setLogLevel('Debug');
+                        
+                        setFbApp({ app, auth, db });
+                        console.log("Firebase services initialized successfully.");
+                        
+                        // 4. Setup Auth Listener
+                        fb.onAuthStateChanged(auth, (user) => {
+                            setAuthUser(user);
+                            setIsAuthLoading(false);
+                        });
+
+                    } catch (e) {
+                        const errorMsg = e.message.includes('Config Parsing') ? e.message : `Initialization Failed: ${e.message}`;
+                        console.error("Critical Firebase Init Error:", e);
+                        setInitError(errorMsg);
+                        setIsAuthLoading(false);
+                    }
+                };
+                setupFirebase();
+            }, []); // Empty dependency array ensures this runs once
 
             const userId = authUser?.uid;
             const userEmail = authUser?.email || 'N/A';
             
+            // Firestore Collection Ref Getter
+            const getPublicCollectionRef = (collectionName) => {
+                const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
+                return fbApp?.db ? fb.collection(fbApp.db, `artifacts/${appId}/public/data/${collectionName}`) : null;
+            };
+
             // 2. Data Fetching Effect (Assets, Risks, Status)
             useEffect(() => {
-                if (!userId || isAuthLoading || !db || !isFirebaseInitialized) return;
+                // IMPORTANT: Ensure everything is ready before trying to attach listeners
+                if (!userId || isAuthLoading || initError || !fb || !fbApp) return;
 
                 const setupPublicListener = (collectionName, setState) => {
                     const colRef = getPublicCollectionRef(collectionName);
                     if (colRef) {
-                        const q = FirebaseServices.query(colRef);
-                        const unsubscribe = FirebaseServices.onSnapshot(q, (snapshot) => {
+                        const q = fb.query(colRef);
+                        const unsubscribe = fb.onSnapshot(q, (snapshot) => {
                             const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+                            // Sort by created time if available, otherwise by ID
+                            data.sort((a, b) => {
+                                const timeA = a.createdAt?.seconds || 0;
+                                const timeB = b.createdAt?.seconds || 0;
+                                return timeB - timeA;
+                            });
                             setState(data);
                         }, (error) => {
                             console.error(`Error listening to ${collectionName}:`, error);
@@ -481,16 +518,16 @@
                 let unsubscribeStatus = () => {};
 
                 if (statusCollectionRef) {
-                    unsubscribeStatus = FirebaseServices.onSnapshot(
-                        FirebaseServices.doc(statusCollectionRef, 'current'),
+                    unsubscribeStatus = fb.onSnapshot(
+                        fb.doc(statusCollectionRef, 'current'),
                         (docSnapshot) => {
                             if (docSnapshot.exists()) {
                                 setDeploymentStatus(docSnapshot.data());
                             } else {
                                 // Initialize default status if it doesn't exist
                                 if(userId) {
-                                    const defaultStatus = { status: 'Online', lastCheck: FirebaseServices.serverTimestamp() };
-                                    FirebaseServices.setDoc(FirebaseServices.doc(statusCollectionRef, 'current'), defaultStatus, { merge: true })
+                                    const defaultStatus = { status: 'Online', lastCheck: fb.serverTimestamp() };
+                                    fb.setDoc(fb.doc(statusCollectionRef, 'current'), defaultStatus, { merge: true })
                                         .catch(e => console.error("Error setting initial status:", e));
                                     setDeploymentStatus(defaultStatus);
                                 }
@@ -506,29 +543,45 @@
                     unsubscribeRisks();
                     unsubscribeStatus();
                 };
-            }, [userId, isAuthLoading, isFirebaseInitialized]); 
+            }, [userId, isAuthLoading, initError, fb, fbApp]); 
 
             const checkAdminAccess = () => {
-                // Simple admin check based on email
+                // Admin check based on email
                 return userEmail === 'admin@otguardian.com' || userEmail === 'cybermelb@gmail.com'; 
             };
             
             const renderView = () => {
                 if (isAuthLoading) {
-                    return <div className="text-center p-12 text-gray-500 flex flex-col items-center"><Loader className="w-8 h-8 animate-spin text-indigo-500 mb-4" /> Loading Authentication...</div>;
+                    // Show a specific error if init failed, otherwise show loading
+                    if(initError) {
+                        return <AuthGate initError={initError} />;
+                    }
+                    // Check if static Firebase loading is complete but auth hasn't returned yet
+                    if (!isFirebaseLoaded()) {
+                         return <div className="text-center p-12 text-gray-500 flex flex-col items-center">
+                            <Loader className="w-8 h-8 animate-spin-slow text-red-500 mb-4" /> 
+                            <p>Waiting for Static Firebase SDK Load...</p>
+                            <p className="text-xs mt-2 text-red-500">If this persists, the CDN link is blocked.</p>
+                        </div>;
+                    }
+
+                    return <div className="text-center p-12 text-gray-500 flex flex-col items-center">
+                        <Loader className="w-8 h-8 animate-spin-slow text-indigo-500 mb-4" /> 
+                        <p>Authenticating User...</p>
+                        <p className="text-xs mt-2">Connecting to OT Guardian Security services.</p>
+                    </div>;
                 }
                 
                 if (!userId) {
-                    // AuthGate handles the Configuration Error display via the global 'configError' variable
-                    return <AuthGate />; 
+                    // Render AuthGate for sign-in
+                    return <AuthGate initError={initError} />; 
                 }
                 
-                // Simplified view rendering
+                // Content Views
                 switch (currentView) {
                     case 'overview':
                         return <OverviewDashboard userId={userId} risks={risks} assets={assets} deploymentStatus={deploymentStatus} />;
                     case 'assetBuilder':
-                        // Placeholder view for simplicity
                         return <PlaceholderView title="Asset Builder" icon={Cpu} />; 
                     case 'riskDashboard':
                         return <PlaceholderView title="Risk Dashboard" icon={Shield} />;
@@ -544,9 +597,9 @@
             };
             
             const handleLogout = async () => {
-                if (auth) {
+                if (fb && fbApp?.auth) {
                     try {
-                        await FirebaseServices.signOut(auth);
+                        await fb.signOut(fbApp.auth);
                         console.log("User signed out successfully.");
                     } catch (error) {
                         console.error("Error during sign out:", error);

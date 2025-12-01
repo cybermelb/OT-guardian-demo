@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>OT Guardian Security Posture Management</title>
     <script src="https://cdn.tailwindcss.com"></script>
-    
+   
     <!-- Lucide Icons for UI -->
     <script src="https://unpkg.com/lucide@latest"></script>
 
@@ -53,7 +53,6 @@
         const APP_ID = MANUAL_FIREBASE_CONFIG.projectId;
 
         // --- FIREBASE MODULE IMPORTS ---
-        // These must load successfully for the app to run.
         import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
         import { getAuth, signInWithCustomToken, onAuthStateChanged, signOut, signInWithEmailAndPassword } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
         import { getFirestore, doc, setDoc, collection, query, onSnapshot, serverTimestamp, setLogLevel, deleteDoc, getDocs, writeBatch } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
@@ -66,21 +65,21 @@
             db: null,
             auth: null,
             userId: null,
-            appId: APP_ID, 
+            appId: APP_ID,
             currentUserEmail: null,
-            
+           
             // App Data
-            view: 'dashboard', 
-            assets: [], 
-            selectedAsset: null, 
-            assetForm: createEmptyAssetForm(), 
-            
+            view: 'dashboard',
+            assets: [],
+            selectedAsset: null,
+            assetForm: createEmptyAssetForm(),
+           
             // UI State
             isModalOpen: false,
             modalContent: {
-                type: '', 
+                type: '',
                 data: null,
-                loading: false, 
+                loading: false,
                 message: ''
             },
         };
@@ -89,7 +88,7 @@
 
         /**
          * Determines the Firestore path for a user's private collection.
-         * @param {string} collectionName 
+         * @param {string} collectionName
          * @returns {string}
          */
         const getUserCollectionPath = (collectionName) => {
@@ -132,40 +131,40 @@
             return Array(4).fill(0).map(() => Math.floor(Math.random() * 255)).join('.');
         }
 
-        // --- MOCK DATA GENERATION (CORRECTED FOR OT ASSETS) ---
+        // --- MOCK DATA GENERATION ---
 
         const generateMockAssets = (count) => {
-            const categories = ["PLC", "HMI", "Server", "Application"];
+            const categories = ["PLC", "HMI", "Server", "Application", "Firewall", "Historian"];
             const criticalities = ["High", "Medium", "Low"];
             const mockVulnerabilities = [
                 { id: 'CVE-2023-1234', name: 'Firmware Buffer Overflow', score: 9.8, status: 'Critical' },
                 { id: 'CVE-2023-5678', name: 'Weak Authentication Protocol', score: 7.5, status: 'High' },
                 { id: 'CVE-2023-9012', name: 'Default Credentials Exposed', score: 4.2, status: 'Medium' },
+                { id: 'CVE-2023-0000', name: 'Missing Patch - Security Update', score: 2.1, status: 'Low' },
             ];
             const assets = [];
 
             for (let i = 1; i <= count; i++) {
                 const category = categories[Math.floor(Math.random() * categories.length)];
                 const criticality = criticalities[Math.floor(Math.random() * criticalities.length)];
-                const ip = generateRandomIP();
-                
+               
                 const asset = createEmptyAssetForm();
                 asset.name = `MOC-${category}-${String(i).padStart(3, '0')}`;
                 asset.category = category;
-                asset.ip_address = ip;
+                asset.ip_address = generateRandomIP();
                 asset.criticality = criticality;
                 asset.firmware_version = `V${Math.floor(Math.random() * 5)}.${Math.floor(Math.random() * 10)}`;
                 asset.location = `Site-A / Zone ${Math.floor(Math.random() * 3) + 1}`;
-                asset.notes = `Automatically generated asset for demonstration. Criticality set to ${criticality}.`;
+                asset.notes = `Automatically generated asset for demonstration.`;
 
                 // Add 0, 1, or 2 random vulnerabilities
                 asset.vulnerabilities = [];
-                const numVulnerabilities = Math.floor(Math.random() * 3); 
+                const numVulnerabilities = Math.floor(Math.random() * 3);
                 const availableVulnerabilities = [...mockVulnerabilities];
 
                 for (let j = 0; j < numVulnerabilities; j++) {
                     const randomIndex = Math.floor(Math.random() * availableVulnerabilities.length);
-                    asset.vulnerabilities.push(availableVulnerabilities.splice(randomIndex, 1)[0]);
+                    asset.vulnerabilities.push(deepClone(availableVulnerabilities.splice(randomIndex, 1)[0]));
                 }
 
                 assets.push(asset);
@@ -191,24 +190,8 @@
                     render();
 
                     const mockAssets = generateMockAssets(20);
-                    const batch = writeBatch(appState.db);
-
-                    mockAssets.forEach(p => {
-                        const newDocRef = doc(collection(appState.db, assetsPath));
-                        const dataToSave = { ...p };
-                        delete dataToSave.id; 
-                        
-                        // Store arrays as string (vulnerabilities) to comply with Firestore constraints
-                        dataToSave.vulnerabilities = JSON.stringify(dataToSave.vulnerabilities); 
-                        
-                        batch.set(newDocRef, { 
-                            ...dataToSave,
-                            createdAt: serverTimestamp(),
-                            updatedAt: serverTimestamp()
-                        });
-                    });
-
-                    await batch.commit();
+                    await saveAssetsBatch(mockAssets); // Use the general batch save function
+                   
                     console.log("Mock OT asset generation complete.");
                 } else {
                     console.log(`Asset collection contains ${snapshot.size} records. Skipping mock data generation.`);
@@ -222,6 +205,150 @@
                 render();
             }
         };
+
+        /**
+         * Saves a batch of asset objects to Firestore. Used for both mock data and CSV upload.
+         * @param {Array<object>} assets - Array of asset objects (excluding ID)
+         */
+        const saveAssetsBatch = async (assets) => {
+            if (!appState.db || !appState.userId) throw new Error("Authentication or DB connection required.");
+            const assetsPath = getUserCollectionPath('assets');
+            if (!assetsPath) throw new Error("Invalid asset collection path.");
+
+            const batch = writeBatch(appState.db);
+            const assetsRef = collection(appState.db, assetsPath);
+
+            assets.forEach(asset => {
+                const newDocRef = doc(assetsRef);
+                const dataToSave = { ...asset };
+                delete dataToSave.id;
+               
+                // Store arrays as string (vulnerabilities) to comply with Firestore constraints
+                // Ensure vulnerabilities field exists and is an array before stringifying
+                if (!Array.isArray(dataToSave.vulnerabilities)) {
+                    dataToSave.vulnerabilities = [];
+                }
+                dataToSave.vulnerabilities = JSON.stringify(dataToSave.vulnerabilities);
+               
+                batch.set(newDocRef, {
+                    ...dataToSave,
+                    createdAt: serverTimestamp(),
+                    updatedAt: serverTimestamp()
+                });
+            });
+
+            await batch.commit();
+            return assets.length;
+        };
+
+
+        // --- CSV IMPORT LOGIC ---
+
+        /**
+         * Parses CSV text into an array of asset objects.
+         * Expects headers: name, category, ip_address, firmware_version, criticality, location, notes
+         * @param {string} csvText
+         * @returns {Array<object>} Parsed assets
+         */
+        const parseCSV = (csvText) => {
+            const lines = csvText.trim().split('\n');
+            if (lines.length === 0) return [];
+           
+            const headers = lines[0].split(',').map(h => h.trim().toLowerCase());
+            const requiredHeaders = ['name', 'ip_address'];
+           
+            // Basic header validation
+            if (!requiredHeaders.every(h => headers.includes(h))) {
+                throw new Error(`CSV is missing required headers: ${requiredHeaders.join(', ')}`);
+            }
+
+            const assets = [];
+            for (let i = 1; i < lines.length; i++) {
+                const values = lines[i].split(',');
+                if (values.length !== headers.length) {
+                    console.warn(`Skipping line ${i + 1}: Column count mismatch.`);
+                    continue;
+                }
+               
+                const asset = createEmptyAssetForm();
+                headers.forEach((header, index) => {
+                    const value = values[index].trim();
+                    if (header in asset && value) {
+                        asset[header] = value;
+                    }
+                });
+
+                // Ensure required fields are present
+                if (!asset.name || !asset.ip_address) {
+                    console.warn(`Skipping line ${i + 1}: Name or IP Address missing.`);
+                    continue;
+                }
+               
+                // Ensure criticality is valid or default
+                const validCriticalities = ["High", "Medium", "Low"];
+                if (!validCriticalities.includes(asset.criticality)) {
+                    asset.criticality = 'Medium';
+                }
+
+                // Ensure category is valid or default
+                const validCategories = ["PLC", "HMI", "Server", "Application", "Firewall", "Historian", "Network Device", "Sensor"];
+                if (!validCategories.includes(asset.category)) {
+                    asset.category = 'PLC';
+                }
+
+                assets.push(asset);
+            }
+            return assets;
+        };
+
+        const handleCSVUpload = async (e) => {
+            e.preventDefault();
+            const fileInput = document.getElementById('csv_file');
+            if (!fileInput.files.length) {
+                appState.modalContent.message = "Please select a CSV file to upload.";
+                render();
+                return;
+            }
+
+            const file = fileInput.files[0];
+            const reader = new FileReader();
+
+            reader.onload = async (event) => {
+                const csvText = event.target.result;
+                appState.modalContent.loading = true;
+                appState.modalContent.message = "Parsing and uploading assets...";
+                render();
+
+                try {
+                    const newAssets = parseCSV(csvText);
+
+                    if (newAssets.length === 0) {
+                        throw new Error("No valid assets found in the CSV file.");
+                    }
+
+                    const count = await saveAssetsBatch(newAssets);
+                   
+                    appState.modalContent.message = `Successfully imported ${count} assets!`;
+                    appState.modalContent.type = 'import_success'; // Change modal type for success message
+                   
+                } catch (error) {
+                    console.error("CSV Import Error:", error);
+                    appState.modalContent.message = `Import failed: ${error.message}`;
+                } finally {
+                    appState.modalContent.loading = false;
+                    render();
+                }
+            };
+
+            reader.onerror = () => {
+                appState.modalContent.loading = false;
+                appState.modalContent.message = "Failed to read the file.";
+                render();
+            };
+
+            reader.readAsText(file);
+        };
+
 
         // --- AUTH & FIREBASE INITIALIZATION ---
 
@@ -257,11 +384,11 @@
                 await signInWithEmailAndPassword(appState.auth, email, password);
                 console.log("Signed in successfully via email/password.");
                 // User state change handled by onAuthStateChanged -> updateAuthState
-                closeModal(); 
+                closeModal();
             } catch (e) {
                 let errorMessage = "Sign In Failed. Please check your credentials.";
                 if (e.code === 'auth/user-not-found' || e.code === 'auth/invalid-credential') errorMessage = 'Invalid email or password.';
-                
+               
                 appState.modalContent.message = errorMessage;
                 console.error("Sign-in error:", e);
                 appState.error = errorMessage;
@@ -276,15 +403,15 @@
                 appState.userId = user.uid;
                 appState.currentUserEmail = user.email || 'Authenticated User';
                 console.log(`User state changed. UID: ${user.uid}`);
-                
+               
                 if (!appState.isAuthReady) {
                     subscribeToData();
-                    checkAndGenerateMockData(); 
+                    checkAndGenerateMockData();
                 }
             } else {
                 appState.userId = null;
                 appState.currentUserEmail = null;
-                appState.assets = []; 
+                appState.assets = [];
                 // If signed out, default to showing the sign-in modal
                 if(appState.isFirebaseReady) openModal('sign_in');
             }
@@ -296,7 +423,6 @@
          * Defensive initialization for Firebase modules.
          */
         const initFirebase = async () => {
-            // CRITICAL CHECK: Ensure imported functions are defined
             if (typeof initializeApp === 'undefined' || typeof getAuth === 'undefined' || typeof getFirestore === 'undefined') {
                 console.error("CRITICAL: Firebase modules failed to load from CDN. Check network connection.");
                 appState.error = `CRITICAL: Firebase modules failed to load. Cannot connect to database. App ID: ${APP_ID}.`;
@@ -311,8 +437,8 @@
                 const app = initializeApp(MANUAL_FIREBASE_CONFIG);
                 appState.db = getFirestore(app);
                 appState.auth = getAuth(app);
-                setLogLevel('debug'); 
-                
+                setLogLevel('debug');
+               
                 appState.isFirebaseReady = true;
                 console.log("Firebase initialized successfully.");
 
@@ -353,7 +479,8 @@
                 snapshot.forEach(doc => {
                     const data = doc.data();
                     let vulnerabilities = data.vulnerabilities || '[]';
-                    
+                   
+                    // Always try to parse JSON stringified arrays
                     if (typeof vulnerabilities === 'string') {
                         try {
                             vulnerabilities = JSON.parse(vulnerabilities);
@@ -362,6 +489,11 @@
                             vulnerabilities = [];
                         }
                     }
+                    // Ensure it is an array in case parsing failed or data was old format
+                    if (!Array.isArray(vulnerabilities)) {
+                        vulnerabilities = [];
+                    }
+
 
                     newAssets.push({
                         id: doc.id,
@@ -382,9 +514,12 @@
                 // Update selected asset if data changed
                 if (appState.selectedAsset) {
                     const updatedAsset = newAssets.find(p => p.id === appState.selectedAsset.id);
-                    appState.selectedAsset = updatedAsset || null;
+                    // Crucially update both selectedAsset and the form data
+                    appState.selectedAsset = updatedAsset ? deepClone(updatedAsset) : null;
+                    appState.assetForm = updatedAsset ? deepClone(updatedAsset) : createEmptyAssetForm();
+
                     if (!updatedAsset && appState.view === 'asset_detail') {
-                        appState.view = 'asset_list'; 
+                        appState.view = 'asset_list';
                     }
                 }
 
@@ -398,7 +533,7 @@
 
         /**
          * Saves or updates an asset record.
-         * @param {object} assetData 
+         * @param {object} assetData
          */
         const saveAsset = async (assetData) => {
             if (!appState.db || !appState.userId) {
@@ -411,26 +546,31 @@
             if (!assetsPath) return;
 
             const dataToSave = { ...assetData };
-            delete dataToSave.id; 
+            delete dataToSave.id;
 
             // Convert array of objects (vulnerabilities) to JSON string
-            dataToSave.vulnerabilities = JSON.stringify(dataToSave.vulnerabilities); 
-            
+            dataToSave.vulnerabilities = JSON.stringify(Array.isArray(dataToSave.vulnerabilities) ? dataToSave.vulnerabilities : []);
+           
             try {
                 const docRef = assetData.id
                     ? doc(appState.db, assetsPath, assetData.id)
                     : doc(collection(appState.db, assetsPath));
-                
-                await setDoc(docRef, { 
+               
+                await setDoc(docRef, {
                     ...dataToSave,
                     updatedAt: serverTimestamp(),
                     ...(assetData.id ? {} : { createdAt: serverTimestamp() })
                 }, { merge: true });
 
                 console.log("Asset saved successfully. ID:", assetData.id || docRef.id);
-                
+               
                 if (appState.view === 'edit_asset') {
-                    appState.view = 'asset_list'; // Navigate to list after save
+                    // Navigate to detail view if it's an existing asset, or list if new
+                    appState.view = assetData.id ? 'asset_detail' : 'asset_list';
+                    if (assetData.id) {
+                         // Force re-selection to update the detail view instantly if needed
+                         appState.selectedAsset = deepClone(assetData);
+                    }
                 }
                 closeModal();
                 render();
@@ -444,7 +584,7 @@
 
         /**
          * Deletes an asset record.
-         * @param {string} assetId 
+         * @param {string} assetId
          */
         const deleteAsset = async (assetId) => {
             if (!appState.db || !appState.userId || !assetId) {
@@ -477,7 +617,7 @@
 
         const handleNavigate = (view, assetId = null) => {
             appState.view = view;
-            
+           
             let asset = null;
             if (assetId) {
                 asset = appState.assets.find(p => p.id === assetId);
@@ -485,7 +625,7 @@
 
             appState.selectedAsset = asset ? deepClone(asset) : null;
             appState.assetForm = asset ? deepClone(asset) : createEmptyAssetForm();
-            
+           
             if (view === 'edit_asset' && !assetId) {
                 appState.assetForm = createEmptyAssetForm();
                 appState.selectedAsset = null;
@@ -519,17 +659,26 @@
                 render();
                 return;
             }
-            appState.error = null; 
+            appState.error = null;
             saveAsset(appState.assetForm);
         };
-        
+       
         const handleAddVulnerability = (e) => {
             e.preventDefault();
             const form = e.target;
+           
+            // Validate score input
+            const scoreValue = parseFloat(form.vuln_score.value);
+            if (isNaN(scoreValue) || scoreValue < 0 || scoreValue > 10) {
+                 appState.modalContent.message = "CVSS Score must be between 0.0 and 10.0.";
+                 render();
+                 return;
+            }
+
             const newVulnerability = {
                 id: form.vuln_id.value || `VULN-${Math.random().toString(36).substring(2, 9).toUpperCase()}`,
                 name: form.vuln_name.value,
-                score: parseFloat(form.vuln_score.value),
+                score: scoreValue,
                 status: form.vuln_status.value
             };
 
@@ -543,10 +692,15 @@
             if (!assetToUpdate.vulnerabilities) {
                 assetToUpdate.vulnerabilities = [];
             }
-            
+           
             assetToUpdate.vulnerabilities.push(newVulnerability);
 
+            // Update the form and selected asset state immediately (before save resolves)
+            appState.selectedAsset = assetToUpdate;
+            appState.assetForm = deepClone(assetToUpdate);
+
             saveAsset(assetToUpdate);
+            // Modal closed in saveAsset on success
         };
 
         // --- RENDERING VIEWS ---
@@ -567,7 +721,7 @@
                             <div class="flex space-x-4">
                                 ${navItems.map(item => `
                                     <button onclick="handleNavigate('${item.view}')"
-                                        class="flex items-center space-x-2 p-2 rounded-lg transition duration-150 ease-in-out 
+                                        class="flex items-center space-x-2 p-2 rounded-lg transition duration-150 ease-in-out
                                         ${appState.view === item.view ? 'bg-indigo-100 text-indigo-600 font-semibold' : 'text-gray-600 hover:bg-gray-100'}"
                                         aria-current="${appState.view === item.view ? 'page' : 'false'}"
                                     >
@@ -578,14 +732,14 @@
                             </div>
                             <div class="flex items-center space-x-3 text-sm text-gray-500">
                                 <span class="hidden sm:inline">${appState.currentUserEmail}</span>
-                                <button onclick="signOut(appState.auth).then(() => handleNavigate('dashboard')).catch(e => console.error('Sign out error:', e))" 
+                                <button onclick="signOut(appState.auth).then(() => handleNavigate('dashboard')).catch(e => console.error('Sign out error:', e))"
                                     class="bg-red-500 text-white p-2 rounded-lg hover:bg-red-600 transition duration-150 ease-in-out"
                                 >
                                     ${lucide.createIcons().LogOut.toSvg({ class: 'w-4 h-4 inline' })}
                                 </button>
                             </div>
                         ` : `
-                            <button onclick="openModal('sign_in')" 
+                            <button onclick="openModal('sign_in')"
                                 class="bg-indigo-600 text-white px-4 py-2 rounded-lg shadow-md hover:bg-indigo-700 transition duration-150 ease-in-out"
                             >
                                 ${lucide.createIcons().LogIn.toSvg({ class: 'w-4 h-4 inline mr-1' })} Sign In
@@ -650,7 +804,7 @@
                     </svg>
                     <p class="mt-4 text-lg font-medium text-gray-700">Initializing Firebase and checking authentication...</p>
                 ` : ''}
-                
+               
                 ${error ? `<div class="mt-4 p-4 bg-red-100 text-red-700 rounded-lg shadow-sm">
                     <h4 class="font-bold">CRITICAL ERROR:</h4>
                     <p>${error}</p>
@@ -658,21 +812,21 @@
                 <p class="mt-2 text-xs text-gray-500">App ID: ${APP_ID}</p>
             </div>
         `;
-        
+       
         const renderSignedOutState = () => `
             <div class="flex flex-col items-center justify-center min-h-[50vh] text-center p-6 bg-indigo-50 rounded-xl border-2 border-indigo-300 shadow-xl">
                 ${lucide.createIcons().Lock.toSvg({ class: 'w-12 h-12 text-indigo-500' })}
                 <h2 class="mt-4 text-xl font-bold text-indigo-800">Access Restricted</h2>
                 <p class="mt-2 text-indigo-600">Please sign in to access your OT Security Asset inventory and data.</p>
-                <button onclick="openModal('sign_in')" 
+                <button onclick="openModal('sign_in')"
                     class="mt-6 px-6 py-3 text-lg font-medium text-white bg-indigo-600 rounded-lg shadow-lg hover:bg-indigo-700 transition duration-150">
                     Sign In Now
                 </button>
                 <div class="mt-6 p-3 bg-white rounded-lg text-left shadow-inner">
                     <p class="text-sm font-semibold text-gray-700">Demo User Credentials (Use these to log in):</p>
                     <ul class="text-xs text-gray-500 list-disc list-inside space-y-1 mt-1">
-                        <li>User 1 Email: <code>CYBERMELB@GMAIL.COM</code>, Pass: <code>Root2026!adm</code></li>
-                        <li>User 2 Email: <code>faysalhasan2001@yahoo.com</code>, Pass: <code>Eng2026!</code></li>
+                        <li>User 1: <code>CYBERMELB@GMAIL.COM</code>, Pass: <code>Root2026!adm</code></li>
+                        <li>User 2: <code>faysalhasan2001@yahoo.com</code>, Pass: <code>Eng2026!</code></li>
                     </ul>
                 </div>
             </div>
@@ -693,7 +847,7 @@
         const renderDashboard = () => {
             const totalAssets = appState.assets.length;
             const highCriticality = appState.assets.filter(a => a.criticality === 'High').length;
-            const vulnerableAssets = appState.assets.filter(a => a.vulnerabilities && a.vulnerabilities.length > 0).length;
+            const vulnerableAssets = appState.assets.filter(a => Array.isArray(a.vulnerabilities) && a.vulnerabilities.length > 0).length;
 
             return `
                 <h1 class="text-3xl font-extrabold text-gray-900 mb-6 border-b pb-2">OT Security Dashboard</h1>
@@ -706,15 +860,15 @@
                 <div class="mt-8">
                     <h2 class="text-2xl font-semibold text-gray-800 mb-4">Quick Actions</h2>
                     <div class="flex flex-wrap gap-4">
-                        <button onclick="handleNavigate('edit_asset')" 
+                        <button onclick="handleNavigate('edit_asset')"
                             class="flex items-center space-x-2 px-4 py-2 bg-indigo-600 text-white rounded-lg shadow-md hover:bg-indigo-700 transition duration-150">
                             ${lucide.createIcons().Plus.toSvg({ class: 'w-5 h-5' })}
                             <span>Add New Asset</span>
                         </button>
-                        <button onclick="handleNavigate('asset_list')" 
-                            class="flex items-center space-x-2 px-4 py-2 bg-gray-200 text-gray-800 rounded-lg hover:bg-gray-300 transition duration-150">
-                            ${lucide.createIcons().List.toSvg({ class: 'w-5 h-5' })}
-                            <span>View All Assets</span>
+                        <button onclick="openModal('import_csv')"
+                            class="flex items-center space-x-2 px-4 py-2 bg-emerald-600 text-white rounded-lg shadow-md hover:bg-emerald-700 transition duration-150">
+                            ${lucide.createIcons().Upload.toSvg({ class: 'w-5 h-5' })}
+                            <span>Import Assets (CSV)</span>
                         </button>
                     </div>
                 </div>
@@ -722,7 +876,7 @@
                 <div class="mt-8">
                     <h2 class="text-2xl font-semibold text-gray-800 mb-4">Top Vulnerable Assets (First 5)</h2>
                     ${appState.assets.length > 0
-                        ? renderAssetTable(appState.assets.filter(a => a.vulnerabilities && a.vulnerabilities.length > 0).slice(0, 5))
+                        ? renderAssetTable(appState.assets.filter(a => Array.isArray(a.vulnerabilities) && a.vulnerabilities.length > 0).slice(0, 5))
                         : '<p class="text-gray-500">No vulnerable assets found or no assets added yet.</p>'}
                 </div>
             `;
@@ -745,18 +899,25 @@
         // --- ASSET LIST VIEW ---
 
         const renderAssetList = () => `
-            <div class="flex justify-between items-center mb-6">
-                <h1 class="text-3xl font-extrabold text-gray-900">Asset Inventory (${appState.assets.length})</h1>
-                <button onclick="handleNavigate('edit_asset')" 
-                    class="flex items-center space-x-2 px-4 py-2 bg-indigo-600 text-white rounded-lg shadow-md hover:bg-indigo-700 transition duration-150">
-                    ${lucide.createIcons().Plus.toSvg({ class: 'w-5 h-5' })}
-                    <span>Add Asset</span>
-                </button>
+            <div class="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-6">
+                <h1 class="text-3xl font-extrabold text-gray-900 mb-4 sm:mb-0">Asset Inventory (${appState.assets.length})</h1>
+                <div class="flex space-x-3">
+                    <button onclick="openModal('import_csv')"
+                        class="flex items-center space-x-2 px-4 py-2 bg-emerald-600 text-white rounded-lg shadow-md hover:bg-emerald-700 transition duration-150">
+                        ${lucide.createIcons().Upload.toSvg({ class: 'w-5 h-5' })}
+                        <span>Import CSV</span>
+                    </button>
+                    <button onclick="handleNavigate('edit_asset')"
+                        class="flex items-center space-x-2 px-4 py-2 bg-indigo-600 text-white rounded-lg shadow-md hover:bg-indigo-700 transition duration-150">
+                        ${lucide.createIcons().Plus.toSvg({ class: 'w-5 h-5' })}
+                        <span>Add Asset</span>
+                    </button>
+                </div>
             </div>
-            
+           
             ${appState.assets.length > 0
                 ? renderAssetTable(appState.assets)
-                : '<div class="p-6 bg-yellow-50 text-yellow-800 rounded-lg"><p>No OT asset records found. Start by adding a new asset.</p></div>'}
+                : '<div class="p-6 bg-yellow-50 text-yellow-800 rounded-lg"><p>No OT asset records found. Start by adding a new asset or importing data via CSV.</p></div>'}
         `;
 
         const renderAssetTable = (assets) => `
@@ -775,7 +936,7 @@
                     <tbody class="bg-white divide-y divide-gray-200">
                         ${assets.map(p => `
                             <tr class="hover:bg-indigo-50 transition duration-150 cursor-pointer">
-                                <td class="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900" 
+                                <td class="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900"
                                     onclick="event.stopPropagation(); handleNavigate('asset_detail', '${p.id}')"
                                 >
                                     ${p.name}
@@ -783,14 +944,14 @@
                                 <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">${p.category}</td>
                                 <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500 font-mono">${p.ip_address}</td>
                                 <td class="px-6 py-4 whitespace-nowrap text-sm">
-                                    <span class="px-3 py-1 inline-flex text-xs leading-5 font-semibold rounded-full 
+                                    <span class="px-3 py-1 inline-flex text-xs leading-5 font-semibold rounded-full
                                         ${p.criticality === 'High' ? 'bg-red-100 text-red-800' : p.criticality === 'Medium' ? 'bg-yellow-100 text-yellow-800' : 'bg-green-100 text-green-800'}">
                                         ${p.criticality}
                                     </span>
                                 </td>
-                                <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">${p.vulnerabilities.length} Found</td>
+                                <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">${(Array.isArray(p.vulnerabilities) ? p.vulnerabilities.length : 0)} Found</td>
                                 <td class="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
-                                    <button onclick="event.stopPropagation(); handleNavigate('edit_asset', '${p.id}')" 
+                                    <button onclick="event.stopPropagation(); handleNavigate('edit_asset', '${p.id}')"
                                         class="text-indigo-600 hover:text-indigo-900 p-1 rounded-full hover:bg-indigo-100 transition" title="Edit Asset">
                                         ${lucide.createIcons().Edit.toSvg({ class: 'w-5 h-5' })}
                                     </button>
@@ -809,9 +970,12 @@
             if (!a) {
                 return renderErrorState("Asset record not found or has been deleted.");
             }
-            
-            const maxVulnerabilityScore = a.vulnerabilities.reduce((max, v) => Math.max(max, v.score), 0);
-            const overallRisk = a.vulnerabilities.length === 0 ? 'Low' : maxVulnerabilityScore >= 7.0 ? 'High' : maxVulnerabilityScore >= 4.0 ? 'Medium' : 'Low';
+           
+            // Defensive Array Handling
+            const vulnerabilitiesArray = Array.isArray(a.vulnerabilities) ? a.vulnerabilities : [];
+           
+            const maxVulnerabilityScore = vulnerabilitiesArray.reduce((max, v) => Math.max(max, v.score || 0), 0);
+            const overallRisk = vulnerabilitiesArray.length === 0 ? 'Low' : maxVulnerabilityScore >= 7.0 ? 'High' : maxVulnerabilityScore >= 4.0 ? 'Medium' : 'Low';
 
             const getRiskClass = (risk) => {
                 if (risk === 'High') return 'bg-red-500';
@@ -829,11 +993,11 @@
                         <button onclick="window.print()" class="px-3 py-2 bg-gray-500 text-white rounded-lg shadow-md hover:bg-gray-600 transition duration-150">
                             ${lucide.createIcons().Printer.toSvg({ class: 'w-5 h-5 inline mr-1' })} Print Report
                         </button>
-                        <button onclick="handleNavigate('edit_asset', '${a.id}')" 
+                        <button onclick="handleNavigate('edit_asset', '${a.id}')"
                             class="px-3 py-2 bg-indigo-600 text-white rounded-lg shadow-md hover:bg-indigo-700 transition duration-150">
                             ${lucide.createIcons().Edit.toSvg({ class: 'w-5 h-5 inline mr-1' })} Edit
                         </button>
-                        <button onclick="openModal('confirm_delete_asset', { id: '${a.id}', name: '${a.name}' })" 
+                        <button onclick="openModal('confirm_delete_asset', { id: '${a.id}', name: '${a.name}' })"
                             class="px-3 py-2 bg-red-600 text-white rounded-lg shadow-md hover:bg-red-700 transition duration-150">
                             ${lucide.createIcons().Trash2.toSvg({ class: 'w-5 h-5 inline mr-1' })} Remove
                         </button>
@@ -878,26 +1042,26 @@
                             <p><strong>User ID:</strong> <span class="font-mono text-xs break-all">${appState.userId}</span></p>
                         </div>
                     </section>
-                    
+                   
                     <section>
                         <h2 class="text-2xl font-semibold text-indigo-700 mb-4 flex items-center">
-                            ${lucide.createIcons().Bug.toSvg({ class: 'w-6 h-6 mr-2' })} Vulnerabilities (${a.vulnerabilities.length})
+                            ${lucide.createIcons().Bug.toSvg({ class: 'w-6 h-6 mr-2' })} Vulnerabilities (${vulnerabilitiesArray.length})
                             <button onclick="openModal('add_vulnerability')" class="ml-auto px-3 py-1 text-sm bg-indigo-500 text-white rounded-lg hover:bg-indigo-600 transition print-hide">
                                 ${lucide.createIcons().Plus.toSvg({ class: 'w-4 h-4 inline mr-1' })} Add Vulnerability
                             </button>
                         </h2>
-                        
-                        ${a.vulnerabilities && a.vulnerabilities.length > 0 
+                       
+                        ${vulnerabilitiesArray.length > 0
                             ? `<div class="bg-gray-50 p-4 rounded-lg shadow-inner custom-scroll max-h-96 overflow-y-auto">
-                                ${a.vulnerabilities.map(v => `
-                                    <div class="flex justify-between items-center p-3 mb-2 rounded-lg border 
+                                ${vulnerabilitiesArray.map(v => `
+                                    <div class="flex justify-between items-center p-3 mb-2 rounded-lg border
                                         ${v.score >= 7.0 ? 'border-red-300 bg-red-50' : v.score >= 4.0 ? 'border-yellow-300 bg-yellow-50' : 'border-green-300 bg-green-50'}">
-                                        
+                                       
                                         <div class="flex-grow">
                                             <p class="font-bold text-gray-900">${v.name} (${v.id})</p>
                                             <p class="text-sm text-gray-700">Status: ${v.status} | CVSS Score: ${v.score}</p>
                                         </div>
-                                        
+                                       
                                         <div class="flex space-x-2 print-hide">
                                             <!-- Action buttons for vulnerabilities can be added here -->
                                         </div>
@@ -915,7 +1079,7 @@
         const renderAssetForm = (formData) => {
             const isEdit = !!formData.id;
             const title = isEdit ? `Edit Asset: ${formData.name}` : 'Add New OT Asset';
-            const categories = ["PLC", "HMI", "Server", "Application", "Firewall", "Historian"];
+            const categories = ["PLC", "HMI", "Server", "Application", "Firewall", "Historian", "Network Device", "Sensor"];
             const criticalities = ["High", "Medium", "Low"];
 
             return `
@@ -928,7 +1092,7 @@
                 </div>
                 <div class="bg-white p-6 rounded-xl shadow-xl">
                     <form onsubmit="handleAssetFormSubmit(event)">
-                        
+                       
                         <input type="hidden" name="id" value="${formData.id || ''}">
 
                         <div class="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6">
@@ -954,7 +1118,7 @@
                                 >
                             </div>
                         </div>
-                        
+                       
                         <div class="grid grid-cols-1 md:grid-cols-3 gap-6 mb-6">
                             <!-- Category -->
                             <div>
@@ -989,7 +1153,7 @@
                                 >
                             </div>
                         </div>
-                        
+                       
                         <!-- Location -->
                         <div class="mb-6">
                             <label for="location" class="block text-sm font-medium text-gray-700">Physical Location / Zone</label>
@@ -1042,7 +1206,7 @@
                         Top 10 Riskiest Assets (Coming Soon)
                     </button>
                     ${appState.assets.length > 0 ? `
-                        <button onclick="handleNavigate('asset_detail', '${appState.assets[0].id}')" 
+                        <button onclick="handleNavigate('asset_detail', '${appState.assets[0].id}')"
                             class="px-4 py-3 bg-indigo-100 text-indigo-700 rounded-lg border border-indigo-300 hover:bg-indigo-200 transition">
                             View Sample Asset Report
                         </button>` : `
@@ -1051,7 +1215,7 @@
                         </button>`
                     }
                 </div>
-                
+               
                 <h2 class="mt-8 text-xl font-semibold text-gray-800">Print Asset Records</h2>
                 <p class="text-gray-600">You can generate a detailed report for any asset by navigating to its detail page and clicking "Print Report".</p>
 
@@ -1077,13 +1241,13 @@
 
                 <section>
                     <h2 class="text-xl font-semibold text-gray-800 mb-3">Authentication</h2>
-                    <button onclick="signOut(appState.auth).then(() => handleNavigate('dashboard'))" 
+                    <button onclick="signOut(appState.auth).then(() => handleNavigate('dashboard'))"
                         class="px-4 py-2 bg-red-500 text-white rounded-lg hover:bg-red-600 transition">
                         ${lucide.createIcons().LogOut.toSvg({ class: 'w-5 h-5 inline mr-1' })} Sign Out
                     </button>
                     <p class="text-sm text-gray-500 mt-2">Sign out to clear your current user session.</p>
                 </section>
-                
+               
                 <section>
                     <h2 class="text-xl font-semibold text-gray-800 mb-3">Application Status</h2>
                     <div class="space-y-2 p-4 ${appState.isFirebaseReady ? 'bg-green-50 border-green-300' : 'bg-red-50 border-red-300'} rounded-lg border">
@@ -1108,7 +1272,7 @@
                     </ul>
                 </div>
             `}
-            
+           
             <form onsubmit="handleSignInSubmit(event)">
                 <div class="mb-4">
                     <label for="email" class="block text-sm font-medium text-gray-700">Email</label>
@@ -1124,10 +1288,10 @@
                         placeholder="Password"
                     >
                 </div>
-                
+               
                 <div class="flex justify-end space-x-3">
                     <button type="button" onclick="closeModal()" class="px-4 py-2 text-gray-700 bg-gray-200 rounded-lg hover:bg-gray-300 transition">Cancel</button>
-                    <button type="submit" 
+                    <button type="submit"
                         class="px-4 py-2 text-white bg-indigo-600 rounded-lg shadow-md hover:bg-indigo-700 transition"
                         ${appState.modalContent.loading ? 'disabled' : ''}
                     >
@@ -1144,6 +1308,9 @@
 
             return `
                 <h3 class="text-lg leading-6 font-medium text-gray-900 mb-4">Add Vulnerability to ${currentAsset.name}</h3>
+                ${appState.modalContent.message ? `
+                    <div class="p-3 mb-4 text-sm text-red-700 bg-red-100 rounded-lg">${appState.modalContent.message}</div>
+                ` : ''}
                 <form onsubmit="handleAddVulnerability(event)">
                     <div class="mb-4">
                         <label for="vuln_name" class="block text-sm font-medium text-gray-700">Vulnerability Name (Required)</label>
@@ -1187,6 +1354,59 @@
             `;
         };
 
+        // --- CSV IMPORT MODAL ---
+        const renderImportCSVForm = () => `
+            <h3 class="text-lg leading-6 font-medium text-gray-900 mb-4">Import Assets from CSV</h3>
+           
+            ${appState.modalContent.loading ? `
+                <div class="p-3 mb-4 text-sm text-indigo-700 bg-indigo-100 rounded-lg">
+                    ${lucide.createIcons().Loader.toSvg({ class: 'w-4 h-4 inline mr-2 animate-spin' })}
+                    ${appState.modalContent.message}
+                </div>
+            ` : appState.modalContent.message ? `
+                <div class="p-3 mb-4 text-sm ${appState.modalContent.type === 'import_success' ? 'text-green-700 bg-green-100' : 'text-red-700 bg-red-100'} rounded-lg">
+                    ${appState.modalContent.message}
+                </div>
+            ` : `
+                <p class="text-sm text-gray-600 mb-4">
+                    Upload a CSV file containing your OT assets. Required columns are
+                    <code class="font-mono bg-gray-100 p-1 rounded">name</code> and
+                    <code class="font-mono bg-gray-100 p-1 rounded">ip_address</code>.
+                </p>
+                <div class="p-3 mb-4 bg-yellow-50 rounded-lg border border-yellow-200">
+                    <p class="text-xs font-semibold text-yellow-800">Example CSV Format (Headers must be present):</p>
+                    <code class="block mt-1 font-mono text-xs whitespace-pre bg-yellow-100 p-2 rounded">
+name,category,ip_address,firmware_version,criticality,location,notes
+PLC-01,PLC,10.0.1.5,V3.1,High,Assembly Line 1,Production Control
+HMI-22,HMI,10.0.2.8,Win10 IoT,Medium,Control Room A,Operator Interface
+                    </code>
+                </div>
+            `}
+           
+            <form onsubmit="handleCSVUpload(event)">
+                <div class="mb-6">
+                    <label for="csv_file" class="block text-sm font-medium text-gray-700">Select CSV File</label>
+                    <input type="file" id="csv_file" name="csv_file" accept=".csv" required
+                        class="mt-1 block w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-lg file:border-0 file:text-sm file:font-semibold file:bg-indigo-50 file:text-indigo-700 hover:file:bg-indigo-100"
+                        ${appState.modalContent.loading ? 'disabled' : ''}
+                    >
+                </div>
+               
+                <div class="flex justify-end space-x-3">
+                    <button type="button" onclick="closeModal()" class="px-4 py-2 text-gray-700 bg-gray-200 rounded-lg hover:bg-gray-300 transition"
+                        ${appState.modalContent.loading ? 'disabled' : ''}>
+                        Close
+                    </button>
+                    <button type="submit"
+                        class="px-4 py-2 text-white bg-emerald-600 rounded-lg shadow-md hover:bg-emerald-700 transition"
+                        ${appState.modalContent.loading || appState.modalContent.type === 'import_success' ? 'disabled' : ''}
+                    >
+                        ${appState.modalContent.loading ? 'Uploading...' : 'Import Assets'}
+                    </button>
+                </div>
+            </form>
+        `;
+
 
         // --- MODAL RENDERING ---
 
@@ -1221,6 +1441,12 @@
                     icon = 'Bug';
                     modalBody = renderAddVulnerabilityForm();
                     break;
+                case 'import_csv':
+                case 'import_success':
+                    modalTitle = `Import Assets`;
+                    icon = 'FileUp';
+                    modalBody = renderImportCSVForm();
+                    break;
                 default:
                     modalBody = `<p>Invalid modal content.</p>`;
             }
@@ -1230,13 +1456,13 @@
                     <div class="flex items-end justify-center min-h-screen pt-4 px-4 pb-20 text-center sm:block sm:p-0">
                         <!-- Background overlay -->
                         <div class="fixed inset-0 bg-gray-500 bg-opacity-75 transition-opacity" onclick="closeModal()"></div>
-                        
+                       
                         <!-- Modal panel -->
                         <div class="inline-block align-bottom bg-white rounded-xl text-left overflow-hidden shadow-xl transform transition-all sm:my-8 sm:align-middle sm:max-w-lg sm:w-full">
                             <div class="bg-white px-4 pt-5 pb-4 sm:p-6 sm:pb-4">
                                 <div class="flex items-start">
-                                    <div class="mx-auto flex-shrink-0 flex items-center justify-center h-12 w-12 rounded-full bg-indigo-100 sm:mx-0 sm:h-10 sm:w-10">
-                                        ${lucide.createIcons()[icon].toSvg({ class: 'w-6 h-6 text-indigo-600' })}
+                                    <div class="mx-auto flex-shrink-0 flex items-center justify-center h-12 w-12 rounded-full ${appState.modalContent.type === 'import_success' ? 'bg-green-100' : 'bg-indigo-100'} sm:mx-0 sm:h-10 sm:w-10">
+                                        ${lucide.createIcons()[icon].toSvg({ class: `w-6 h-6 ${appState.modalContent.type === 'import_success' ? 'text-green-600' : 'text-indigo-600'}` })}
                                     </div>
                                     <div class="mt-3 text-center sm:mt-0 sm:ml-4 sm:text-left w-full">
                                         <h3 class="text-lg leading-6 font-medium text-gray-900" id="modal-title">
@@ -1291,8 +1517,9 @@
         window.deleteAsset = deleteAsset;
         window.createEmptyAssetForm = createEmptyAssetForm;
         window.handleAddVulnerability = handleAddVulnerability;
-        window.handleSignInSubmit = handleSignInSubmit; 
-        window.appState = appState; 
+        window.handleSignInSubmit = handleSignInSubmit;
+        window.handleCSVUpload = handleCSVUpload; // New CSV handler
+        window.appState = appState;
         window.signOut = signOut;
 
         // **CRITICAL FIX:** Ensure DOM is loaded before initializing Firebase
